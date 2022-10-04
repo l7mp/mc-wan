@@ -1,24 +1,24 @@
 # A Multi-cluster service mesh east-west gateway for SD-WAN
 
-The goal of this project is to build an east-west (EW) gateway to interconnect two or more
-service-mesh islands over an SD-WAN and integrate the L7-preferences on the service-mesh side with
-the L3/L4 traffic management policies on the SD-WAN interconnect, as well as the observability and
-security functions
+The goal of this project is to build an east-west (EW) gateway to seamlessly interconnect two or
+more service-mesh clusters over an SD-WAN fabric, integrating the L4/L7 traffic management policies
+on the service-mesh side with the L3/L4 policies on the SD-WAN interconnect, as well as the
+observability and the security functions, into a comprehensive end-to-end user experience.
 
-## Means
+The plan is to realize this goal as follows:
 
 * Services between clusters are exported/imported using the [Multi-cluster Services API
   (KEP-1645)](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api)
   CRDs, extended with L7 policies and SD-WAN-related semantics to control the way traffic egresses
   from, and ingresses into, a cluster.
 * The import/export policies are rendered into regular [Kubernetes Gateway
-  API](https://gateway-api.sigs.k8s.io) CRDs and implemented on top of a standard Kubernetes
-  gateway implementing the API.
-* The EW gateways exchange inter-cluster traffic in a way so as to the SD-WAN fabric
-  interconnecting the clusters can make meaningful classification of traffic to/from different
-  services and deliver the required service level to each service as specified by the operator.
+  API](https://gateway-api.sigs.k8s.io) CRDs and implemented on top of a standard [Kubernetes
+  gateway implementation](https://gateway-api.sigs.k8s.io/implementations).
+* The EW gateways exchange inter-cluster traffic in a way so that the SD-WAN fabric interconnecting
+  the clusters can classify the traffic to/from different services into distinct traffic classes
+  and deliver the required service level to each traffic class as specified by the operator.
 
-# User stories
+## User stories
 
 * **Receiver-controlled default SD-WAN policies.** The `payment.secure` HTTP service (port 8080),
 deployed into cluster-1, serves sensitive data, so the service owner in cluster-1 wants to secure
@@ -26,28 +26,29 @@ access to this service, by forcing all queries/responses to this service to be s
 interconnect in the fastest and most secure way. At the same time, the `logging.insecure` service
 serves less-sensitive bulk traffic, so the corresponding traffic exchange defaults to the Internet.
 
-* **Ingress L7 traffic management on the receiver side.** Same scenario as above, but now the only
-GET queries to the `http://payment.secure:8080/payment` API endpoint are considered sensitive,
-access to `http://payment.secure:8080/stats` are irrelevant, and any other access to the service is
-denied.
+* **Ingress L7 traffic management on the receiver side.** Same scenario as above, but now only GET
+queries to the `http://payment.secure:8080/payment` API endpoint are considered sensitive, access
+to `http://payment.secure:8080/stats` is irrelevant (defaults to the Internet), and any other
+access to the service is denied.
 
 * **Egress L7 traffic management rules on the sender side.** Same scenario as above, but now all
-queries sent between clusters must include an HTTP header field called `sender-cluster` to indicate
-the sending cluster's identity to the service backends on the receiver side. In addition, the
-sender can also overrides the service-owner's default SD-WAN policies if they want.
+queries sent between clusters must be tagged with an HTTP header field called `sender-cluster` at
+the egress EW gateway in order to indicate the sending cluster's identity to the service backends
+on the receiver side. In addition, the sender can also override the service-owner's default SD-WAN
+policies if they want.
 
 * **Resiliency:** Regular Internet connection to one of the clusters goes down. The EW gateways
 automatically initiate a circuit-breaking for the failed EW-gateway endpoint and retry all failed
-connection over either the SD-WAN or another cluster where healthy backends are still running.
+connections over either the SD-WAN or another cluster where healthy backends are still running.
 
-* **Monitoring:** Task operators want end-to-end monitoring of queries across the
-clusters. EW-gateways add a `spanid` header to all HTTP(S) traffic exchanged over the SD-WAN
-interconnect.
+* **Monitoring:** Task operators want end-to-end monitoring across the clusters. EW-gateways add a
+`spanid` header to all HTTP(S) traffic exchanged over the SD-WAN interconnect to trace requests
+across the service-mesh clusters and the SD-WAN.
 
 ## Concepts
 
-We use HTTP throughout for simplicity. It is trivial to enforce encryption by rewriting all rules
-to HTTPS.
+We use pure unencrypted HTTP throughout for simplicity. It is trivial to enforce encryption by
+rewriting all rules to HTTPS.
 
 ### Interconnect fabric: SD-WAN
 
@@ -61,16 +62,16 @@ be able to classify our traffic to apply the forwarding preferences.
 * the rest of the priority levels use the subsequent ports X+1, X+2, etc.,
 * we can define a separate port for traffic that is to be exchanged over the Internet.
 
-We assume the SD-WAN is bootstrapped with appropriate per-destination port application-aware
+We assume the SD-WAN is bootstrapped with appropriate per-destination-port application-aware
 routing policies to enforce the priority encoded in the destination port.
 
 ### EW gateways
 
-We use a standard implementation that supports a sufficiently large subset of the Gateway API, see
-[here](https://gateway-api.sigs.k8s.io/implementations) for an up-to-date list. Maybe the best
-choice would be
+We use a standard [Kubernetes gateway
+implementation](https://gateway-api.sigs.k8s.io/implementations) that supports a sufficiently broad
+subset of the Gateway API. Maybe the best choice would be
 [Istio](https://istio.io/latest/docs/tasks/traffic-management/ingress/gateway-api): that way we
-could use further service-mesh functionality as well.
+could use further service-mesh functionality *inside the clusters* as well.
 
 We assume that the EW gateway pods are labeled with `app.kubernetes.io/name: gateway` or whatever
 the implementation we choose use for this purpose.
@@ -79,6 +80,23 @@ the implementation we choose use for this purpose.
 
 In order to allow access from other clusters, a service has to be explicitly exported from the
 hosting cluster. 
+
+Suppose that in the exporting cluster the payment service is defined as follows. Note that the
+resultant FQDN for the service will be `payment.secure.svc.cluster.local`.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment
+  namespace: secure
+spec:
+  selector:
+    app: payment
+  ports:
+  - port: 8080
+    protocol: TCP
+```
 
 ### CRD
 
@@ -115,15 +133,15 @@ spec:
           name: sd-wan-priority-low
 ```
 
-Note that the name of the ServiceExport is the same as that of the service to be exported and
-`rules` is a list of standard
+Note that the name/namespace of the ServiceExport is the same as that of the service to be exported
+and `rules` is a list of standard
 [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1beta1.HTTPRouteRule)
 objects from the Kubernetes Gateway API. Each rule can specify a `backendRef` to the
 `sd-wan-priority-high` and `sd-wan-priority-high` services: these are dummy services we create to
 represent the SD-WAN priority for the queries. Note that we cannot enforce these priorities on the
 receiver side (by the time we receive the request on the EW gateway it has already passed the
-SD-WAN), so these priorities serve only as a default priority to the sender side (unless they decide to
-override the default priority).
+SD-WAN), so these priorities serve only as a default priority to the sender side (unless they
+decide to override the default priority).
 
 ### Egress gateway logistics
 
@@ -217,7 +235,9 @@ We may need to add an [annotation](https://gateway-api.sigs.k8s.io/guides/multip
 ## Service import
 
 In order to access an exported service, the sender-side cluster must explicitly import the target
-service.
+service. Note that before the ServiceImport is created there is no service on the sender side: it
+is the job of the service-import-controller to make sure that the adequate "shadow" services
+backing the ServiceImports are created.
 
 ### CRDs
 
@@ -249,14 +269,19 @@ spec:
             value: cluster-2
 ```
 
-Note that the name of the ServiceImport is the same as that of the service to be imported. In
-addition, `ports` is a standard `ServicePort` object from the [Multi-cluster Services
+Note that the name/namespace of the ServiceImport is the same as that of the service to be
+imported. In addition, `ports` is a standard `ServicePort` object from the [Multi-cluster Services
 API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api)
 SerrviceImport CRDs, and `rules` is a list of standard
 [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1beta1.HTTPRouteRule)
-objects from the Kubernetes Gateway API. Each rule can specify a `backendRef` to the dummy
-`sd-wan-priority-high` and `sd-wan-priority-high` services to override the SD-WAN priority set by
-the service owner on the receiver side.
+objects from the Kubernetes Gateway API. Each rule can optionally specify a `backendRef` to the
+dummy `sd-wan-priority-high` and `sd-wan-priority-high` services to override the SD-WAN priority
+set by the service owner on the receiver side.
+
+### Ingress gateway logistics
+
+No bootstrapping is required on the egress side of the EW gateway: everything will be created
+dynamically.
 
 ### Compiling the ServiceImport
 
@@ -306,12 +331,12 @@ side. The below resources are created for the above sample service import.
    ```
 
    An actual implementation will not create a separate Gateway per service-import but it will
-   rather just add another HTTP listener to a global `egress-gateway`, but for the purpose of this
-   spec it is easier to explain what's going on this way.
+   rather just add another HTTP listener to a global `egress-gateway` instance, but for the purpose
+   of this spec it is easier to explain what's going on this way.
 
 1. We add a HTTPRoute that represents the L7 rules to be applied on the sender side and to send the
-   query over to the other side. For that purpose, we will use a target service that we create in
-   order to forward the request to the EW gateways that actually export the service (see below).
+   query over to the other side. For that purpose, we will use a `backendRef` to a dummy service
+   called `payment-secure-target` that we will create below.
 
    ```yaml
    apiVersion: gateway.networking.k8s.io/v1beta1
@@ -337,11 +362,11 @@ side. The below resources are created for the above sample service import.
              port: 31111
    ```
 
-   Note that listen to the hostname of both the original `payment.secure` service as well as for
-   that of the shadow service `payment-secure.mcw`. Note further that the target port is the one
+   Note that we listen to both the original `payment.secure` hostname as well as to that of the
+   shadow service `payment-secure.mcw` for safety. Note further that the target port is the one
    that belongs to the selected SD-WAN priority.
 
-1. We still need the service that we used above as a `backendRef`. The goal is to route traffic to
+1. We still need the service that we set above as a `backendRef`. The goal is to route traffic to
    this service to one of the EW gateways in the clusters that export the service. We create a
    dummy service that will represent the IP addresses of the appropriate EW gateways.  Note that
    the service deliberately has [no
@@ -360,7 +385,14 @@ side. The below resources are created for the above sample service import.
      ports:
        - protocol: TCP
          port: 31111
-   ---
+   ```
+
+1. Finally we manually create the Endpoint object for the above dummy service and list the IP
+   address of the Gateways that we want to receive the corresponding traffic. In our case, these
+   are exactly the IP addresses of the clusters that have a ServiceExport for the `payment.secure`
+   service. 
+
+   ```yaml
    apiVersion: v1
    kind: Endpoints
    metadata:
