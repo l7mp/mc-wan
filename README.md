@@ -54,9 +54,9 @@ rewriting all rules to HTTPS.
 
 For each SD-WAN priority level (say, `business` and `default`), we enforce a separate HTTP(s) EW-EW
 HTTP(S) session, otherwise if everything goes over a single HTPP(S) stream then the SD-WAN may not
-be able to classify our traffic to apply the forwarding preferences.
+be able to classify the inter-cluster traffic to apply the forwarding preferences.
 
-**Idea:** we apply the following rule:
+We apply the following rule:
 * all access to the receiver side EW-gateway that is to receive high priority on the SD-WAN uses
   some predefined port X (say, 31111),
 * the rest of the priority levels use the subsequent ports X+1, X+2, etc.,
@@ -134,14 +134,14 @@ spec:
 ```
 
 Note that the name/namespace of the ServiceExport is the same as that of the service to be exported
-and `rules` is a list of standard
+and `spec.http.rules` is a list of standard
 [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1beta1.HTTPRouteRule)
 objects from the Kubernetes Gateway API. Each rule can specify a `backendRef` to the
-`sd-wan-priority-high` and `sd-wan-priority-high` services: these are dummy services we create to
-represent the SD-WAN priority for the queries. Note that we cannot enforce these priorities on the
-receiver side (by the time we receive the request on the EW gateway it has already passed the
-SD-WAN), so these priorities serve only as a default priority to the sender side (unless they
-decide to override the default priority).
+`sd-wan-priority-high` and `sd-wan-priority-low` (and similar) services: these are dummy services
+we create to represent the SD-WAN priority for the queries. Note that we cannot enforce these
+priorities on the receiver side (by the time we receive the request on the EW gateway it has
+already passed the SD-WAN), so these priorities serve only as a default priority to the sender side
+(unless they decide to override the default priority).
 
 ### Egress gateway logistics
 
@@ -226,8 +226,8 @@ spec:
 ```
 
 The `rules` is copied verbatim to the HTTPRoute, except that we rewrite the `hostname` to the
-original name of the target service and the set the `backendRefs` to refer to the exported service
-`payment.secure` over port 8080. 
+original name of the target service and set the `backendRefs` to refer to the exported service
+`payment.secure` over port 8080.
 
 We may need to add an [annotation](https://gateway-api.sigs.k8s.io/guides/multiple-ns) or a
 `PolicyTargetReference` as well to allow cross-namespace routing.
@@ -261,27 +261,80 @@ spec:
   - name: http
     protocol: TCP
     port: 9080
-  rules:
-    - filter:
-        requestHeaderModifier:
-          add:
-            name: origin-cluster
-            value: cluster-2
+  http:
+    rules:
+      - filter:
+          requestHeaderModifier:
+            add:
+              name: origin-cluster
+              value: cluster-2
 ```
 
 Note that the name/namespace of the ServiceImport is the same as that of the service to be
-imported. In addition, `ports` is a standard `ServicePort` object from the [Multi-cluster Services
+imported. In addition, `spec.ports` is a standard `ServicePort` object from the [Multi-cluster
+Services
 API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api)
-SerrviceImport CRDs, and `rules` is a list of standard
+SerrviceImport CRDs, and `spec.http.rules` is a list of standard
 [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1beta1.HTTPRouteRule)
 objects from the Kubernetes Gateway API. Each rule can optionally specify a `backendRef` to the
-dummy `sd-wan-priority-high` and `sd-wan-priority-high` services to override the SD-WAN priority
-set by the service owner on the receiver side.
+dummy `sd-wan-priority-high` and `sd-wan-priority-low` services to override the SD-WAN priority set
+by the service owner on the receiver side.
 
 ### Ingress gateway logistics
 
-No bootstrapping is required on the egress side of the EW gateway: everything will be created
-dynamically.
+We bootstrap the egress side of the EW gateway with a set of dummy services that will allow routing
+the requests from the sender-side cluster to the proper receiver-side EW gateway(s) that have
+actual backends/pods serving the requested service. In particular, for any cluster participating in
+the multi-cluster fleet, we create a service whose endpoints we tightly control to contain the
+externally reachable IP address of the corresponding EW gateway.
+
+In the running example, we represent the EW gateway of cluster-1 on the sender side with the below
+selector-less service and the corresponding Endpoint object.
+
+1. We create a dummy service that will represent the IP address(es) of the EW gateways on the
+   remote clusters (cluster-1 for now).  Note that the service deliberately has [no
+   selectors](https://kubernetes.io/docs/concepts/services-networking/service/#services-without-selectors):
+   in such cases Kubernetes does not create the Endpoint object to back the service, so we can
+   create one manually and add the IP address of the EW gateways of the target clusters explicitly.
+   
+   ```yaml
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: mc-wan-cluster-1-target
+     namespace: mc-wan
+   spec:
+     ports:
+       - protocol: TCP
+         port: 31111
+       - protocol: TCP
+         port: 31112
+       - protocol: TCP
+         port: 31113
+   ```
+   
+   Note that we list all SD-WAN ports: we want to reuse the same service across all egress EW
+   gateway policies.
+
+1. Finally we manually create the Endpoint object for the dummy service and list the IP address of
+   the Gateways that we want to receive the corresponding traffic (the IP addresses of the EW
+   gateway in cluster-1 in our case).
+
+   ```yaml
+   apiVersion: v1
+   kind: Endpoints
+   metadata:
+     name: mc-wan-cluster-1-target-endpoint
+     namespace: mc-wan
+   subsets:
+     - addresses:
+         - ip: IP_1
+   ```
+
+The idea here is that any query sent to the `mc-wan-cluster-1-target` service will be send over to
+the EW gateway of cluster-1, and we assume that all participating clusters are wrapped with one
+such service/endpoint pair on every other cluster. We will use these dummy services below as
+backends for the EW egress gateway policies.
 
 ### Compiling the ServiceImport
 
@@ -289,9 +342,9 @@ Compiling the ServiceImport to Kubernetes APIs is a tad bit more complex than on
 side. The below resources are created for the above sample service import. 
 
 1. We create a shadow service in the `mc-wan` namespace. The idea is that whenever an application
-   wants to send a query to the global service they must use the shadow service instead of the
-   original service name, with the port specified in the ServiceImport (if no port is specified in
-   the ServiceImport then we fall back to the original port on the receiver side).
+   wants to send a query to the global `payment,secure` service they must use the shadow service
+   instead of the original service, with the port specified in the ServiceImport (if no port is
+   specified in the ServiceImport then we fall back to the original port on the receiver side).
    
    ```yaml
    apiVersion: v1
@@ -331,12 +384,13 @@ side. The below resources are created for the above sample service import.
    ```
 
    An actual implementation will not create a separate Gateway per service-import but it will
-   rather just add another HTTP listener to a global `egress-gateway` instance, but for the purpose
-   of this spec it is easier to explain what's going on this way.
+   rather just add another HTTP listener to a global `egress-http-gateway` instance, but for the
+   purpose of this spec it is easier to explain what's going on this way.
 
 1. We add a HTTPRoute that represents the L7 rules to be applied on the sender side and to send the
-   query over to the other side. For that purpose, we will use a `backendRef` to a dummy service
-   called `payment-secure-target` that we will create below.
+   query over to the other side. For that purpose, we will use a `backendRef` to the dummy service
+   created in the bootstrapping step to direct the matching packets to the receiver-side EW
+   gateway.
 
    ```yaml
    apiVersion: gateway.networking.k8s.io/v1beta1
@@ -357,62 +411,37 @@ side. The below resources are created for the above sample service import.
                name: origin-cluster
                value: cluster-2
          backendRefs:
-           - name: payment-secure-target
+           - name: mc-wan-cluster-1-target
              namespace: mc-wan
              port: 31111
+             weight: 1
    ```
 
    Note that we listen to both the original `payment.secure` hostname as well as to that of the
-   shadow service `payment-secure.mcw` for safety. Note further that the target port is the one
-   that belongs to the selected SD-WAN priority.
+   shadow service `payment-secure.mcw` for safety. Note further that the `backendRef` of the rule
+   points to the dummy service wrapping the ingress EW gateway that will receive the packets
+   matching the filter, the target port is the one that belongs to the selected SD-WAN priority (we
+   select the highest SD-WAN priority for the `payment.secure` service so we set the port to 31111)
+   and finally the weight is set to 1. In general, the weight allows us to load-balance requests
+   across the receiver side clusters based on the number of pods allocated in each cluster; e.g.,
+   if cluster-X has 3 pods for the `payment.secure` service and cluster-Y has 4 pods, then the
+   corresponding weights will be 3 and 4, respectively.
 
-1. We still need the service that we set above as a `backendRef`. The goal is to route traffic to
-   this service to one of the EW gateways in the clusters that export the service. We create a
-   dummy service that will represent the IP addresses of the appropriate EW gateways.  Note that
-   the service deliberately has [no
-   selectors](https://kubernetes.io/docs/concepts/services-networking/service/#services-without-selectors):
-   in such cases Kubernetes does not create an Endpoint object to back the service, so we can
-   create one manually and add the IP addresses of the EW gateways of the target clusters
-   explicitly.
-   
-   ```yaml
-   apiVersion: v1
-   kind: Service
-   metadata:
-     name: payment-secure-target
-     namespace: mc-wan
-   spec:
-     ports:
-       - protocol: TCP
-         port: 31111
-   ```
+## Resiliency
 
-1. Finally we manually create the Endpoint object for the above dummy service and list the IP
-   address of the Gateways that we want to receive the corresponding traffic. In our case, these
-   are exactly the IP addresses of the clusters that have a ServiceExport for the `payment.secure`
-   service. 
+Implementing health-check/retry/timeout/circuit-breaking policies is subject to the appearance of
+the corresponding features in the Gateway API. Some
+[thinking](https://github.com/kubernetes-sigs/gateway-api/issues/97) is already going on in that
+direction: once these APIs become available it is straightforward to add them to our
+ServiceImport/ServiceExport CRDs.
 
-   ```yaml
-   apiVersion: v1
-   kind: Endpoints
-   metadata:
-     name: payment-secure-target
-     namespace: mc-wan
-   subsets:
-     - addresses:
-         - ip: IP_1
-       ports:
-         - port: 31111
-           port: 31112
-           port: 31113
-   ```
+## Observability
 
-   In this example only cluster-1 exports the service, so we add the IP address of the
-   corresponding EW gateway. This is most probably the IP of one of the nodes because, recall, we
-   expose EW gateways with NodePort services so that we can control routing and force traffic
-   through the SD-WAN. Note further that we have added all SD-WAN ports to the service, because we
-   want to reuse the same service even there are multiple HTTP filter rules in the ServiceImport
-   (e.g., there can be a rule that only `http://payment.secure/payment` is sensitive and
-   `http://payment.secure/logging` is not and then we will have different HTTPRoute rules with the
-   same `backendRef` pointing to this service.
+Adding `spanid` headers is already within the capabilities of the framework, but maybe at a certain
+point we could provide some automation around this.
 
+## License
+
+Copyright 2021-2022 by its authors. Some rights reserved. See [AUTHORS](/AUTHORS).
+
+MIT License - see [LICENSE](/LICENSE) for full text.
