@@ -167,6 +167,10 @@ spec:
             add:
               name: origin-cluster
               value: cluster-2
+        backendRefs:
+          group: mc-wan.l7mp.io
+          kind: WANPolicy
+          name: sd-wan-priority-high
 ```
 
 Note that the name/namespace of the ServiceImport is the same as that of the service to be
@@ -175,13 +179,14 @@ Services
 API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api)
 SerrviceImport CRDs, and `spec.http.rules` is a list of standard
 [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1beta1.HTTPRouteRule)
-objects from the Kubernetes Gateway API. Each rule may optionally specify a `backendRef` to the
-`sd-wan-priority-high` and `sd-wan-priority-low` CRDs in order to override the SD-WAN priority set
-by the service owner on the receiver side.
+objects from the Kubernetes Gateway API. Each rule may optionally specify a `backendRef` to the one
+of the WANPolicy CRDs in order to override the SD-WAN priority set by the service owner on the
+receiver side (here both import and the export side specify the same WAN policy to there is no
+override).
 
 ### WAN policies
 
-The ServiceExport and ServiceImport fields may associate a WAN policy with each HTTP filter, which
+ServiceExport and ServiceImport resources may associate a WAN policy with each HTTP filter, which
 is represented by a CRD named `WANPolicy.mc-wan.l7mp.io`.  The format of this CRD is completely
 unspecified for now; below is a sample that is enough for the purposes of this note. At this point
 the best option seems to be if we make these CRDs cluster-global, to avoid that WAN policies
@@ -201,8 +206,16 @@ kind: WANPolicy
 metadata:
   name: sd-wan-priority-low
 spec:
-  tunnel: internet
+  tunnel: default
   port: 31112
+---
+apiVersion: mc-wan.l7mp.io/v1alpha1
+kind: WANPolicy
+metadata:
+  name: sd-wan-priority-internet
+spec:
+  tunnel: ""
+  port: 31113
 ```
 
 In a full design we may write the requested SLAs here or anything else the SD-WAN will be able to
@@ -210,8 +223,12 @@ enforce.
 
 ## Description
 
-We deconstruct our ServiceImports/ServiceExports to actual Kubernetes resources/objects and use
-existing implementations to encode the policies in our EW gateways.
+We deconstruct our ServiceImports and ServiceExports to actual Kubernetes resources/objects and use
+existing implementations to encode the policies in our EW gateways. In contrast, WANPolicy
+resources do not appear explicitly in any of the gateway pipelines; these resources are purely
+virtual and serve only (1) for the user to be able to indicate the chosen WAN policy in service
+imports and exports and (2) for the control plane to drive the selection of the destination port in
+the egress gateway pipeline (see below).
 
 ### Interconnect fabric: SD-WAN
 
@@ -219,11 +236,12 @@ For each SD-WAN priority level (say, `business` and `default`), we enforce a sep
 HTTP(S) session, otherwise if everything goes over a single HTPP(S) stream then the SD-WAN may not
 be able to classify the inter-cluster traffic to apply the forwarding preferences.
 
-We apply the following rule:
-* all access to the receiver side EW-gateway that is to receive high priority on the SD-WAN uses
-  some predefined port X (say, 31111),
-* the rest of the priority levels use the subsequent ports X+1, X+2, etc.,
-* we can define a separate port for traffic that is to be exchanged over the Internet.
+We apply the following rules.
+* All SD-WAN priority levels (i.e., tunnels) are wrapped by a CRD that specifies the port used for
+  sending traffic over the SD-WAN with that priority (say, 31111 for high-prio traffic).
+* All access to the receiver side EW-gateway that is to receive high priority on the SD-WAN uses
+  some predefined port X that we specify in the corresponding WANPolicy resource.
+* We may define a separate port for traffic that is to be exchanged over the Internet.
 
 We assume the SD-WAN is bootstrapped with appropriate per-destination-port application-aware
 routing policies to enforce the priority encoded in the destination port.
@@ -237,10 +255,7 @@ subset of the Gateway API. Maybe the best choice would be
 could use further service-mesh functionality *inside the clusters* as well.
 
 We assume that the EW gateway pods are labeled with `app.kubernetes.io/name: gateway` or whatever
-the implementation we choose use for this purpose. We note that WANPolicy resources do not appear
-explicitly in any of the gateway pipelines; these resources are purely virtual and the only reason
-is (1) for the user to be able to indicate the WAN policy in service imports and exports and (2) to
-drive the selection of the destination port in the egress gateway pipeline.
+the implementation we choose uses for this purpose. 
 
 #### Ingress gateway pipeline
 
@@ -329,9 +344,9 @@ spec:
           port: 8080
 ```
 
-The `rules` is copied verbatim to the HTTPRoute, except that we rewrite the `hostname` to the
-original name of the target service and set the `backendRefs` to refer to the exported service
-`payment.secure` over port 8080.
+The `http.rules` object is copied verbatim from the ServiceExport to the HTTPRoute, except that we
+rewrite the `hostname` to the original name of the target service and set the `backendRefs` to
+refer to the exported service `payment.secure` over port 8080.
 
 We may need to add an [annotation](https://gateway-api.sigs.k8s.io/guides/multiple-ns) or a
 `PolicyTargetReference` as well to allow cross-namespace routing.
@@ -341,7 +356,7 @@ We may need to add an [annotation](https://gateway-api.sigs.k8s.io/guides/multip
 The egress gateway pipeline contains the necessary Kubernetes resources for the sender side cluster
 to send traffic over the SD-WAN to the receiver side for the services that are imported into the
 cluster. Note that only those clusters would receive requests from that actually (1) export the
-corresponding service and (2) have healthy backend pods for the service. 
+corresponding service and (2) have healthy backend pods for the service.
 
 ##### Logistics
 
@@ -351,8 +366,8 @@ backends/pods serving the requested service. In particular, for any cluster part
 multi-cluster fleet, we create a service whose endpoints contain the externally reachable IP
 address of the corresponding EW gateway.
 
-In the running example, we represent the EW gateway of cluster-1 on the sender side with the below
-selector-less service and the corresponding Endpoint object.
+In the running example, we represent the EW gateway of cluster-1 on the sender side with the a
+dummy service and the corresponding Endpoint object.
 
 1. We create a dummy service that will represent the IP address(es) of the EW gateways on the
    remote clusters (cluster-1 for now).  Note that the service deliberately has [no
@@ -405,7 +420,7 @@ Compiling the ServiceImport to Kubernetes APIs is a tad bit more complex than on
 side. The below resources are created for the above sample service import. 
 
 1. We create a shadow service in the `mc-wan` namespace. The idea is that whenever an application
-   wants to send a query to the global `payment,secure` service they must use the shadow service
+   wants to send a query to the global `payment.secure` service they must use the shadow service
    instead of the original service, with the port specified in the ServiceImport (if no port is
    specified in the ServiceImport then we fall back to the original port on the receiver side).
    
@@ -484,12 +499,13 @@ side. The below resources are created for the above sample service import.
    shadow service `payment-secure.mcw` for safety. Note further that the `backendRef` of the rule
    points to the dummy service wrapping the ingress EW gateway that will receive the packets
    matching the filter, the target port is the one that belongs to the selected SD-WAN priority,
-   and finally the weight is set to 1.  Here, the service import specifies the
-   `sd-wan-priority-high` WAN policy for the `payment.secure` service export and the import does
-   not override this, so we select the corresponding port 31111. In addition, the weight allows us
-   to load-balance requests across the receiver side clusters based on the number of pods allocated
-   in each cluster; e.g., if cluster-X has 3 pods for the `payment.secure` service and cluster-Y
-   has 4 pods, then the corresponding weights will be as follows.
+   and finally the weight is set to 1.  Here, the ServiceExport specifies the
+   `sd-wan-priority-high` WAN policy for the `payment.secure` service and the ServiceImport does
+   not override this, so we select the corresponding port from the matching WANPolicy,
+   i.e., 31111. In addition, the weight allows us to load-balance requests across the receiver side
+   clusters based on the number of pods allocated in each cluster; e.g., if cluster-X has 3 pods
+   for the `payment.secure` service and cluster-Y has 4 pods, then the corresponding weights will
+   be as follows.
 
 
    ```yaml
@@ -510,13 +526,14 @@ side. The below resources are created for the above sample service import.
 Implementing health-check/retry/timeout/circuit-breaking policies is subject to the appearance of
 the corresponding features in the Gateway API. Some
 [thinking](https://github.com/kubernetes-sigs/gateway-api/issues/97) is already going on in that
-direction: once these APIs become available it is straightforward to add them to our
-ServiceImport/ServiceExport CRDs.
+direction: once these APIs become available it is straightforward to add them to our ServiceImport
+and ServiceExport CRDs.
 
 ### Observability
 
-Adding `spanid` headers is already within the capabilities of the framework, but maybe at a certain
-point we could provide some automation around this.
+Adding a `spanid` HTTP header to each connection crossing the SD-WAN is already within the
+capabilities of the framework, but maybe at a certain point we could provide some automation around
+this.
 
 ## License
 
