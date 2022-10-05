@@ -1,0 +1,27 @@
+#+LATEX_CLASS: beamer
+#+LATEX_CLASS_OPTIONS: [presentation]
+#+BEAMER_THEME: Madrid
+#+BEAMER_HEADER:\setbeamertemplate{items}[circle]
+#+LATEX_HEADER:\newcommand{\labelitemi}{$\bullet$}
+#+LATEX_HEADER:\newcommand{\labelitemii}{$\circ$}
+# #+BEAMER_HEADER:\setbeamertemplate{itemize items}[ball]
+#+LATEX_HEADER:\usepackage{enumitem}
+# #+LATEX_HEADER:\usepackage{algcompatible}
+#+LATEX_HEADER:\usepackage{helvet}
+# #+LATEX_HEADER:\usepackage{tgadventor}
+#+OPTIONS: H:1 toc:nil num:nil author:t *:t
+
+#+TITLE: A Multi-cluster service mesh east-west gateway for SD-WAN
+#+AUTHOR: BME + Cisco
+
+* Goals
+
+- build an east-west (EW) gateway to seamlessly interconnect two or more service-mesh clusters over
+  an SD-WAN fabric into a comprehensive end-to-end user experience,
+- integrating the L4/L7 traffic management policies on the service-mesh side with
+  the L3/L4 policies on the SD-WAN interconnect,
+- as well as the observability and the security functions.
+
+#+ATTR_LATEX: :placement [t] :width 340pt
+[[./multi-cluster-service-mesh-ew-gateway-reference-arch-crop.pdf]]
+  

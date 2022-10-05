@@ -15,6 +15,11 @@ observability and the security functions, into a comprehensive end-to-end user e
 
 ## Overview
 
+The idea is to provide consistent end-to-end traffic management, security and observability
+features across a multi-cluster service mesh deployment interconnected by an SD-WAN fabric.
+
+![Multi-cluster service-mesh/SD-WAN integration architecture](./doc/multi-cluster-service-mesh-ew-gateway-reference-arch-crop.pdf)
+
 The plan is to realize this goal as follows:
 
 * Services between clusters are exported/imported using the [Multi-cluster Services API
