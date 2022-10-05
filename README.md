@@ -194,6 +194,15 @@ metadata:
   name: sd-wan-priority-high
 spec:
   tunnel: business
+  port: 31111
+---
+apiVersion: mc-wan.l7mp.io/v1alpha1
+kind: WANPolicy
+metadata:
+  name: sd-wan-priority-low
+spec:
+  tunnel: internet
+  port: 31112
 ```
 
 In a full design we may write the requested SLAs here or anything else the SD-WAN will be able to
@@ -228,7 +237,10 @@ subset of the Gateway API. Maybe the best choice would be
 could use further service-mesh functionality *inside the clusters* as well.
 
 We assume that the EW gateway pods are labeled with `app.kubernetes.io/name: gateway` or whatever
-the implementation we choose use for this purpose.
+the implementation we choose use for this purpose. We note that WANPolicy resources do not appear
+explicitly in any of the gateway pipelines; these resources are purely virtual and the only reason
+is (1) for the user to be able to indicate the WAN policy in service imports and exports and (2) to
+drive the selection of the destination port in the egress gateway pipeline.
 
 #### Ingress gateway pipeline
 
@@ -471,12 +483,27 @@ side. The below resources are created for the above sample service import.
    Note that we listen to both the original `payment.secure` hostname as well as to that of the
    shadow service `payment-secure.mcw` for safety. Note further that the `backendRef` of the rule
    points to the dummy service wrapping the ingress EW gateway that will receive the packets
-   matching the filter, the target port is the one that belongs to the selected SD-WAN priority (we
-   select the highest SD-WAN priority for the `payment.secure` service so we set the port to 31111)
-   and finally the weight is set to 1. In general, the weight allows us to load-balance requests
-   across the receiver side clusters based on the number of pods allocated in each cluster; e.g.,
-   if cluster-X has 3 pods for the `payment.secure` service and cluster-Y has 4 pods, then the
-   corresponding weights will be 3 and 4, respectively.
+   matching the filter, the target port is the one that belongs to the selected SD-WAN priority,
+   and finally the weight is set to 1.  Here, the service import specifies the
+   `sd-wan-priority-high` WAN policy for the `payment.secure` service export and the import does
+   not override this, so we select the corresponding port 31111. In addition, the weight allows us
+   to load-balance requests across the receiver side clusters based on the number of pods allocated
+   in each cluster; e.g., if cluster-X has 3 pods for the `payment.secure` service and cluster-Y
+   has 4 pods, then the corresponding weights will be as follows.
+
+
+   ```yaml
+   ...
+         backendRefs:
+           - name: mc-wan-cluster-X-target
+             namespace: mc-wan
+             port: 31111
+             weight: 3
+           - name: mc-wan-cluster-Y-target
+             namespace: mc-wan
+             port: 31111
+             weight: 4
+   ```
 
 ### Resiliency
 
