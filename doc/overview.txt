@@ -9,6 +9,8 @@
 # #+LATEX_HEADER:\usepackage{algcompatible}
 #+LATEX_HEADER:\usepackage{helvet}
 # #+LATEX_HEADER:\usepackage{tgadventor}
+# #+LATEX_HEADER:\lstdefinelanguage{yaml}{keywords={true,false,null,y,n},keywordstyle=\color{darkgray}\bfseries\tiny,ndkeywords={},ndkeywordstyle=\color{black}\bfseries\tiny,identifierstyle=\color{black},sensitive=false,comment=[l]{#},morecomment=[s]{/*}{*/},commentstyle=\color{purple}\ttfamily,stringstyle=\color{blue}\ttfamily,morestring=[b]',morestring=[b]"p}
+#+LATEX_HEADER:\lstdefinelanguage{yaml}{basicstyle=\ttfamily\tiny,frame=tblr,framerule=.2pt,framexleftmargin=1pt,showstringspaces=false,escapechar=\@}
 #+OPTIONS: H:1 toc:nil num:nil author:t *:t
 
 #+TITLE: A Multi-cluster service mesh east-west gateway for SD-WAN
@@ -17,11 +19,117 @@
 * Goals
 
 - build an east-west (EW) gateway to seamlessly interconnect two or more service-mesh clusters over
-  an SD-WAN fabric into a comprehensive end-to-end user experience,
-- integrating the L4/L7 traffic management policies on the service-mesh side with
-  the L3/L4 policies on the SD-WAN interconnect,
-- as well as the observability and the security functions.
+  an SD-WAN fabric into a comprehensive end-to-end user experience
+- integrate the L4/L7 traffic management policies on the service-mesh side with the L3/L4 policies
+  on the SD-WAN interconnect
+- end-to-end observability and the security across the service mesh and the SD-WAN segments
 
 #+ATTR_LATEX: :placement [t] :width 340pt
 [[./multi-cluster-service-mesh-ew-gateway-reference-arch-crop.pdf]]
-  
+
+* User stories
+
+- receiver-controlled default SD-WAN policies: the service owner wants all accesses to the
+  =payment.secure= HTTP service (port 8080) to be mapped to the high-prio SD-WAN tunnel
+- ingress L7 traffic management on the receiver side: same, but now only GET queries should map to
+  the high-prio tunnel
+- egress L7 traffic management rules on the sender side: same, but now all queries sent between
+  clusters must be tagged with an HTTP header to indicate the sending cluster's identity
+- resiliency: automatic failover between SD-WAN tunnels
+- monitoring: end-to-end observability
+
+* Principles
+
+- we **assign a separate HTTP port with each SD-WAN tunnel** to make sure that EW traffic can
+  actually be classified by the SD-WAN in order to apply the proper SD-WAN prio
+- we **reuse official Kubernetes APIs**, namely the
+  [[https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api][Multi-cluster
+  Services API (KEP-1645)]] for service export/import and the
+  [[https://gateway-api.sigs.k8s.io][Kubernetes Gateway API]] for L4/L7 policies
+- we **implement the whole thing on top of a standard
+  [[https://gateway-api.sigs.k8s.io/implementations][Kubernetes gateway implementation]]**
+
+* Service exports
+
+- services have to be explicitly exported from the hosting cluster to allow access from other
+  clusters
+  #+BEGIN_SRC yaml
+  apiVersion: mc-wan.l7mp.io/v1alpha1
+  kind: ServiceExport
+  metadata:
+    name: payment
+    namespace: secure
+  spec:
+    http:
+      rules:
+        - matches:
+            - method: GET
+              path: { type: PathPrefix, value: /payment }
+          backendRefs:
+            group: mc-wan.l7mp.io
+            kind: WANPolicy
+            name: sd-wan-priority-high
+        - matches:
+            - path: { type: PathPrefix, value: /stats }
+          backendRefs:
+            group: mc-wan.l7mp.io
+            kind: WANPolicy
+            name: sd-wan-priority-low
+  #+END_SRC
+- service exports consist of 2 parts: the L4/L7 policies at the ingress side plus the SD-WAN
+  priority to apply to matching traffic
+
+* Service imports
+
+- services have to be explicitly imported for a cluster to be able consume it
+  #+BEGIN_SRC yaml
+  apiVersion: mc-wan.l7mp.io/v1alpha1
+  kind: ServiceImport
+  metadata:
+    name: payment
+    namespace: secure
+  spec:
+    ports:
+    - name: http
+      protocol: TCP
+      port: 9080
+    http:
+      rules:
+        - filter:
+            requestHeaderModifier:
+              add: { name: origin-cluster, value: cluster-2 }
+          backendRefs:
+            group: mc-wan.l7mp.io
+            kind: WANPolicy
+            name: sd-wan-priority-high
+    #+END_SRC
+- service imports consist of 2 parts: the L4/L7 policies at the egress side plus the SD-WAN
+  priority to apply to matching traffic
+- service imports can override the exporter-side WAN policies
+
+* WAN policies
+
+- service exports and imports can associate the requested WAN policy for a service
+  #+BEGIN_SRC yaml
+  apiVersion: mc-wan.l7mp.io/v1alpha1
+  kind: WANPolicy
+  metadata:
+    name: sd-wan-priority-high
+  spec:
+    tunnel: business
+    port: 31111
+  #+END_SRC
+
+* Mechanics
+
+- the spec contains a detailed description of how to map the above CRDs to actual Kubernetes APIs:
+  [[https://github.com/l7mp/mc-wan][https://github.com/l7mp/mc-wan]]
+- this will allow us to reuse an existing Gateway API implementation to realize the EW gateways
+- the plan is now to configure the gateways manually to play with the idea
+- iterate on the CRDs and the mechanics
+- and finally write an actual Kubernetes operator to automate this: this will be a *massive*
+  undertaking
+
+
+
+
