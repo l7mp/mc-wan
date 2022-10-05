@@ -7,11 +7,11 @@ observability and the security functions, into a comprehensive end-to-end user e
 
 ## Table of contents
 
-* [Overview](#overview)
-* [User stories](#user-stories)
-* [Concepts](#concepts)
-* [Description](#description)
-* [License](#license)
+1. [Overview](#overview)
+1. [User stories](#user-stories)
+1. [Concepts](#concepts)
+1. [Description](#description)
+1. [License](#license)
 
 ## Overview
 
