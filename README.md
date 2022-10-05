@@ -18,6 +18,9 @@ The plan is to realize this goal as follows:
   the clusters can classify the traffic to/from different services into distinct traffic classes
   and deliver the required service level to each traffic class as specified by the operator.
 
+We default to pure unencrypted HTTP throughout for simplicity. It is trivial to enforce encryption
+by rewriting all rules to HTTPS.
+
 ## User stories
 
 * **Receiver-controlled default SD-WAN policies.** The `payment.secure` HTTP service (port 8080),
@@ -47,36 +50,7 @@ across the service-mesh clusters and the SD-WAN.
 
 ## Concepts
 
-We use pure unencrypted HTTP throughout for simplicity. It is trivial to enforce encryption by
-rewriting all rules to HTTPS.
-
-### Interconnect fabric: SD-WAN
-
-For each SD-WAN priority level (say, `business` and `default`), we enforce a separate HTTP(s) EW-EW
-HTTP(S) session, otherwise if everything goes over a single HTPP(S) stream then the SD-WAN may not
-be able to classify the inter-cluster traffic to apply the forwarding preferences.
-
-We apply the following rule:
-* all access to the receiver side EW-gateway that is to receive high priority on the SD-WAN uses
-  some predefined port X (say, 31111),
-* the rest of the priority levels use the subsequent ports X+1, X+2, etc.,
-* we can define a separate port for traffic that is to be exchanged over the Internet.
-
-We assume the SD-WAN is bootstrapped with appropriate per-destination-port application-aware
-routing policies to enforce the priority encoded in the destination port.
-
-### EW gateways
-
-We use a standard [Kubernetes gateway
-implementation](https://gateway-api.sigs.k8s.io/implementations) that supports a sufficiently broad
-subset of the Gateway API. Maybe the best choice would be
-[Istio](https://istio.io/latest/docs/tasks/traffic-management/ingress/gateway-api): that way we
-could use further service-mesh functionality *inside the clusters* as well.
-
-We assume that the EW gateway pods are labeled with `app.kubernetes.io/name: gateway` or whatever
-the implementation we choose use for this purpose.
-
-## Service export
+### Service export
 
 In order to allow access from other clusters, a service has to be explicitly exported from the
 hosting cluster. 
@@ -97,8 +71,6 @@ spec:
   - port: 8080
     protocol: TCP
 ```
-
-### CRD
 
 We introduce a `ServiceExport.mc-wan.l7mp.io` CRD for controlling exported services. Our
 ServiceExport CRD is essentially the same as the identically named CRD from the [Multi-cluster
@@ -143,7 +115,84 @@ priorities on the receiver side (by the time we receive the request on the EW ga
 already passed the SD-WAN), so these priorities serve only as a default priority to the sender side
 (unless they decide to override the default priority).
 
-### Egress gateway logistics
+### Service import
+
+In order to access an exported service, the sender-side cluster must explicitly import the target
+service. Note that before the ServiceImport is created there is no service on the sender side: it
+is the job of the service-import-controller to make sure that the adequate "shadow" services
+backing the ServiceImports are created.
+
+We introduce a `ServiceImport.mc-wan.l7mp.io` CRD for controlling service imports.  Our
+ServiceImport CRD is essentially the same as the identically named CRD from the [Multi-cluster
+Services
+API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api),
+with the exception that our CRD (1) encodes the preferred SD-WAN policy and (2) specifies the
+sender-side L7 traffic management policies.
+
+Below is sample ServiceImport for importing the `payment.secure` service into cluster-2:
+
+```yaml
+apiVersion: mc-wan.l7mp.io/v1alpha1
+kind: ServiceImport
+metadata:
+  name: payment
+  namespace: secure
+spec:
+  ports:
+  - name: http
+    protocol: TCP
+    port: 9080
+  http:
+    rules:
+      - filter:
+          requestHeaderModifier:
+            add:
+              name: origin-cluster
+              value: cluster-2
+```
+
+Note that the name/namespace of the ServiceImport is the same as that of the service to be
+imported. In addition, `spec.ports` is a standard `ServicePort` object from the [Multi-cluster
+Services
+API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api)
+SerrviceImport CRDs, and `spec.http.rules` is a list of standard
+[`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1beta1.HTTPRouteRule)
+objects from the Kubernetes Gateway API. Each rule can optionally specify a `backendRef` to the
+dummy `sd-wan-priority-high` and `sd-wan-priority-low` services to override the SD-WAN priority set
+by the service owner on the receiver side.
+
+## Components
+
+We deconstruct our ServiceImports/ServiceExports to actual Kubernetes resources/objects and use
+existing implementations to encode the policies in our EW gateways.
+
+### Interconnect fabric: SD-WAN
+
+For each SD-WAN priority level (say, `business` and `default`), we enforce a separate HTTP(s) EW-EW
+HTTP(S) session, otherwise if everything goes over a single HTPP(S) stream then the SD-WAN may not
+be able to classify the inter-cluster traffic to apply the forwarding preferences.
+
+We apply the following rule:
+* all access to the receiver side EW-gateway that is to receive high priority on the SD-WAN uses
+  some predefined port X (say, 31111),
+* the rest of the priority levels use the subsequent ports X+1, X+2, etc.,
+* we can define a separate port for traffic that is to be exchanged over the Internet.
+
+We assume the SD-WAN is bootstrapped with appropriate per-destination-port application-aware
+routing policies to enforce the priority encoded in the destination port.
+
+### EW gateways
+
+We use a standard [Kubernetes gateway
+implementation](https://gateway-api.sigs.k8s.io/implementations) that supports a sufficiently broad
+subset of the Gateway API. Maybe the best choice would be
+[Istio](https://istio.io/latest/docs/tasks/traffic-management/ingress/gateway-api): that way we
+could use further service-mesh functionality *inside the clusters* as well.
+
+We assume that the EW gateway pods are labeled with `app.kubernetes.io/name: gateway` or whatever
+the implementation we choose use for this purpose.
+
+#### Egress gateway logistics
 
 We bootstrap the EW gateway with an HTTP listener for each SD-WAN port (X, X+1,...). This will
 serve for ingesting the traffic from the SD-WAN into the cluster.
@@ -183,7 +232,7 @@ enforce this by adding a route to the sending clusters that routes the node-ip-r
 to the vEdge), and exposing the `mc-wan-internet-listener` with a LoadBalancer service to route it
 via the default Internet.
 
-### Compiling the ServiceExport
+#### Compiling the ServiceExport
 
 This ServiceExport is compiled into the below standard Kubernetes
 [HTTPRoute](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1beta1.HTTPRoute)
@@ -232,54 +281,6 @@ original name of the target service and set the `backendRefs` to refer to the ex
 We may need to add an [annotation](https://gateway-api.sigs.k8s.io/guides/multiple-ns) or a
 `PolicyTargetReference` as well to allow cross-namespace routing.
     
-## Service import
-
-In order to access an exported service, the sender-side cluster must explicitly import the target
-service. Note that before the ServiceImport is created there is no service on the sender side: it
-is the job of the service-import-controller to make sure that the adequate "shadow" services
-backing the ServiceImports are created.
-
-### CRDs
-
-We introduce a `ServiceImport.mc-wan.l7mp.io` CRD for controlling service imports.  Our
-ServiceImport CRD is essentially the same as the identically named CRD from the [Multi-cluster
-Services
-API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api),
-with the exception that our CRD (1) encodes the preferred SD-WAN policy and (2) specifies the
-sender-side L7 traffic management policies.
-
-Below is sample ServiceImport for importing the `payment.secure` service into cluster-2:
-
-```yaml
-apiVersion: mc-wan.l7mp.io/v1alpha1
-kind: ServiceImport
-metadata:
-  name: payment
-  namespace: secure
-spec:
-  ports:
-  - name: http
-    protocol: TCP
-    port: 9080
-  http:
-    rules:
-      - filter:
-          requestHeaderModifier:
-            add:
-              name: origin-cluster
-              value: cluster-2
-```
-
-Note that the name/namespace of the ServiceImport is the same as that of the service to be
-imported. In addition, `spec.ports` is a standard `ServicePort` object from the [Multi-cluster
-Services
-API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api)
-SerrviceImport CRDs, and `spec.http.rules` is a list of standard
-[`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1beta1.HTTPRouteRule)
-objects from the Kubernetes Gateway API. Each rule can optionally specify a `backendRef` to the
-dummy `sd-wan-priority-high` and `sd-wan-priority-low` services to override the SD-WAN priority set
-by the service owner on the receiver side.
-
 ### Ingress gateway logistics
 
 We bootstrap the egress side of the EW gateway with a set of dummy services that will allow routing
@@ -336,7 +337,7 @@ the EW gateway of cluster-1, and we assume that all participating clusters are w
 such service/endpoint pair on every other cluster. We will use these dummy services below as
 backends for the EW egress gateway policies.
 
-### Compiling the ServiceImport
+#### Compiling the ServiceImport
 
 Compiling the ServiceImport to Kubernetes APIs is a tad bit more complex than on the export
 side. The below resources are created for the above sample service import. 
@@ -427,7 +428,7 @@ side. The below resources are created for the above sample service import.
    if cluster-X has 3 pods for the `payment.secure` service and cluster-Y has 4 pods, then the
    corresponding weights will be 3 and 4, respectively.
 
-## Resiliency
+### Resiliency
 
 Implementing health-check/retry/timeout/circuit-breaking policies is subject to the appearance of
 the corresponding features in the Gateway API. Some
@@ -435,7 +436,7 @@ the corresponding features in the Gateway API. Some
 direction: once these APIs become available it is straightforward to add them to our
 ServiceImport/ServiceExport CRDs.
 
-## Observability
+### Observability
 
 Adding `spanid` headers is already within the capabilities of the framework, but maybe at a certain
 point we could provide some automation around this.
