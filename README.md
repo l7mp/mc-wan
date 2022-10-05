@@ -33,6 +33,8 @@ by rewriting all rules to HTTPS.
 
 ## User stories
 
+We envision the following use cases.
+
 * **Receiver-controlled default SD-WAN policies.** The `payment.secure` HTTP service (port 8080),
 deployed into cluster-1, serves sensitive data, so the service owner in cluster-1 wants to secure
 access to this service, by forcing all queries/responses to this service to be sent over the SD-WAN
@@ -60,6 +62,8 @@ across the service-mesh clusters and the SD-WAN.
 
 ## Concepts
 
+Below we describe the high-level EW Gateway API we expose to the cluster operators.
+
 ### Service export
 
 In order to allow access from other clusters, a service has to be explicitly exported from the
@@ -82,7 +86,7 @@ spec:
     protocol: TCP
 ```
 
-We introduce a `ServiceExport.mc-wan.l7mp.io` CRD for controlling exported services. Our
+We introduce a CRD called `ServiceExport.mc-wan.l7mp.io` for controlling exported services. Our
 ServiceExport CRD is essentially the same as the identically named CRD from the [Multi-cluster
 Services
 API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api),
@@ -106,24 +110,28 @@ spec:
               type: PathPrefix
               value: /payment
         backendRefs:
+          group: mc-wan.l7mp.io
+          kind: WANPolicy
           name: sd-wan-priority-high
       - matches:
           - path:
               type: PathPrefix
               value: /stats
         backendRefs:
+          group: mc-wan.l7mp.io
+          kind: WANPolicy
           name: sd-wan-priority-low
 ```
 
 Note that the name/namespace of the ServiceExport is the same as that of the service to be exported
 and `spec.http.rules` is a list of standard
 [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1beta1.HTTPRouteRule)
-objects from the Kubernetes Gateway API. Each rule can specify a `backendRef` to the
-`sd-wan-priority-high` and `sd-wan-priority-low` (and similar) services: these are dummy services
-we create to represent the SD-WAN priority for the queries. Note that we cannot enforce these
-priorities on the receiver side (by the time we receive the request on the EW gateway it has
-already passed the SD-WAN), so these priorities serve only as a default priority to the sender side
-(unless they decide to override the default priority).
+objects from the Kubernetes Gateway API. Each rule can specify a `backendRef` to the CRDs named
+`sd-wan-priority-high` and `sd-wan-priority-low`, which represent the SD-WAN policy to be applied
+to HTTP traffic matching the rule (see below). Note that we cannot enforce these priorities on the
+receiver side (by the time we receive the request on the ingress EW gateway it has already passed
+via the SD-WAN), so these priorities serve only as a default priority to the sender side (unless
+they decide to override the default priority).
 
 ### Service import
 
@@ -167,9 +175,29 @@ Services
 API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api)
 SerrviceImport CRDs, and `spec.http.rules` is a list of standard
 [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1beta1.HTTPRouteRule)
-objects from the Kubernetes Gateway API. Each rule can optionally specify a `backendRef` to the
-dummy `sd-wan-priority-high` and `sd-wan-priority-low` services to override the SD-WAN priority set
+objects from the Kubernetes Gateway API. Each rule may optionally specify a `backendRef` to the
+`sd-wan-priority-high` and `sd-wan-priority-low` CRDs in order to override the SD-WAN priority set
 by the service owner on the receiver side.
+
+### WAN policies
+
+The ServiceExport and ServiceImport fields may associate a WAN policy with each HTTP filter, which
+is represented by a CRD named `WANPolicy.mc-wan.l7mp.io`.  The format of this CRD is completely
+unspecified for now; below is a sample that is enough for the purposes of this note. At this point
+the best option seems to be if we make these CRDs cluster-global, to avoid that WAN policies
+installed into different namespaces somehow end up conflicting.
+
+```yaml
+apiVersion: mc-wan.l7mp.io/v1alpha1
+kind: WANPolicy
+metadata:
+  name: sd-wan-priority-high
+spec:
+  tunnel: business
+```
+
+In a full design we may write the requested SLAs here or anything else the SD-WAN will be able to
+enforce.
 
 ## Description
 
@@ -202,7 +230,12 @@ could use further service-mesh functionality *inside the clusters* as well.
 We assume that the EW gateway pods are labeled with `app.kubernetes.io/name: gateway` or whatever
 the implementation we choose use for this purpose.
 
-#### Egress gateway logistics
+#### Ingress gateway pipeline
+
+The ingress gateway pipeline contains the necessary Kubernetes resources for the receiving side
+cluster to ingest inter-cluster traffic from the SD-WAN for services exported from the cluster.
+
+##### Logistics
 
 We bootstrap the EW gateway with an HTTP listener for each SD-WAN port (X, X+1,...). This will
 serve for ingesting the traffic from the SD-WAN into the cluster.
@@ -242,7 +275,7 @@ enforce this by adding a route to the sending clusters that routes the node-ip-r
 to the vEdge), and exposing the `mc-wan-internet-listener` with a LoadBalancer service to route it
 via the default Internet.
 
-#### Compiling the ServiceExport
+##### Compiling the ServiceExport
 
 This ServiceExport is compiled into the below standard Kubernetes
 [HTTPRoute](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1beta1.HTTPRoute)
@@ -291,13 +324,20 @@ original name of the target service and set the `backendRefs` to refer to the ex
 We may need to add an [annotation](https://gateway-api.sigs.k8s.io/guides/multiple-ns) or a
 `PolicyTargetReference` as well to allow cross-namespace routing.
     
-### Ingress gateway logistics
+#### Egress gateway pipeline
 
-We bootstrap the egress side of the EW gateway with a set of dummy services that will allow routing
-the requests from the sender-side cluster to the proper receiver-side EW gateway(s) that have
-actual backends/pods serving the requested service. In particular, for any cluster participating in
-the multi-cluster fleet, we create a service whose endpoints we tightly control to contain the
-externally reachable IP address of the corresponding EW gateway.
+The egress gateway pipeline contains the necessary Kubernetes resources for the sender side cluster
+to send traffic over the SD-WAN to the receiver side for the services that are imported into the
+cluster. Note that only those clusters would receive requests from that actually (1) export the
+corresponding service and (2) have healthy backend pods for the service. 
+
+##### Logistics
+
+We bootstrap the egress pipeline with a set of dummy services that will allow routing the requests
+from the sender-side cluster to the proper receiver-side EW gateway(s) that have actual
+backends/pods serving the requested service. In particular, for any cluster participating in the
+multi-cluster fleet, we create a service whose endpoints contain the externally reachable IP
+address of the corresponding EW gateway.
 
 In the running example, we represent the EW gateway of cluster-1 on the sender side with the below
 selector-less service and the corresponding Endpoint object.
@@ -327,9 +367,9 @@ selector-less service and the corresponding Endpoint object.
    Note that we list all SD-WAN ports: we want to reuse the same service across all egress EW
    gateway policies.
 
-1. Finally we manually create the Endpoint object for the dummy service and list the IP address of
-   the Gateways that we want to receive the corresponding traffic (the IP addresses of the EW
-   gateway in cluster-1 in our case).
+1. We manually create the Endpoint object for the dummy service and list the IP address of the
+   Gateway that we want to receive the corresponding traffic (the IP addresses of the EW gateway in
+   cluster-1 in our case, i.e., `IP_1`).
 
    ```yaml
    apiVersion: v1
@@ -342,10 +382,10 @@ selector-less service and the corresponding Endpoint object.
          - ip: IP_1
    ```
 
-The idea here is that any query sent to the `mc-wan-cluster-1-target` service will be send over to
+The idea here is that any query sent to the `mc-wan-cluster-1-target` service will be forwarded to
 the EW gateway of cluster-1, and we assume that all participating clusters are wrapped with one
 such service/endpoint pair on every other cluster. We will use these dummy services below as
-backends for the EW egress gateway policies.
+backends for the egress gateway policies.
 
 #### Compiling the ServiceImport
 
