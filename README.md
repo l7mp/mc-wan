@@ -5,6 +5,16 @@ more service-mesh clusters over an SD-WAN fabric, integrating the L4/L7 traffic 
 on the service-mesh side with the L3/L4 policies on the SD-WAN interconnect, as well as the
 observability and the security functions, into a comprehensive end-to-end user experience.
 
+## Table of contents
+
+## [Overview](#overview)
+## [User stories](#user-stories)
+## [Concepts](#concepts)
+## [Description](#description)
+## [License](#license)
+
+## Overview
+
 The plan is to realize this goal as follows:
 
 * Services between clusters are exported/imported using the [Multi-cluster Services API
@@ -161,7 +171,7 @@ objects from the Kubernetes Gateway API. Each rule can optionally specify a `bac
 dummy `sd-wan-priority-high` and `sd-wan-priority-low` services to override the SD-WAN priority set
 by the service owner on the receiver side.
 
-## Components
+## Description
 
 We deconstruct our ServiceImports/ServiceExports to actual Kubernetes resources/objects and use
 existing implementations to encode the policies in our EW gateways.
