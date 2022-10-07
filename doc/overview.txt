@@ -14,7 +14,7 @@
 #+OPTIONS: H:1 toc:nil num:nil author:t *:t
 
 #+TITLE: A Multi-cluster service mesh east-west gateway for SD-WAN
-#+AUTHOR: BME + Cisco
+#+AUTHOR:
 
 * Goals
 
@@ -29,7 +29,7 @@
 
 * User stories
 
-- *integrated SD-WAN policies:* the service owner wants all accesses to the =payment.secure= HTTP
+- *enforce SD-WAN policies:* the service owner wants all accesses to the =payment.secure= HTTP
   service (port 8080) to be mapped to the high-prio SD-WAN tunnel
 - *L7 traffic management:* same, but now only GET queries should map to the high-prio tunnel
 - *resiliency:* automatic failover between SD-WAN tunnels
@@ -37,16 +37,16 @@
 
 * Principles
 
-- we **assign a separate HTTP port with each SD-WAN tunnel** to make sure that EW traffic can
-  actually be classified by the SD-WAN in order to apply the proper SD-WAN prio
-- we **enforce the L4/L7 traffic management policies and SD-WAN priorities on the egress EW
-  gateway**, the ingress EW gateway merely proxies the service traffic to the corresponding
-  endpoints in the cluster
-- we **reuse official Kubernetes APIs**, namely the
+- **separate traffic flows intended to be sent over different SD-WAN tunnels** on the egress EW
+  gateway, in order for the SD-WAN to be able to apply the proper SD-WAN priority
+- **enforce the L4/L7 traffic management policies and SD-WAN priorities on the egress EW gateway**,
+  the ingress EW gateway merely proxies the service traffic to the corresponding endpoints in the
+  cluster
+- **reuse official Kubernetes APIs**, namely the
   [[https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api][Multi-cluster
   Services API (KEP-1645)]] for service export/import and the
   [[https://gateway-api.sigs.k8s.io][Kubernetes Gateway API]] for L4/L7 policies
-- we **implement the whole thing on top of a standard
+- **implement the whole thing on top of a standard
   [[https://gateway-api.sigs.k8s.io/implementations][Kubernetes gateway implementation]]**
 
 * Service exports
