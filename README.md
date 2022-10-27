@@ -280,9 +280,9 @@ spec:
   hostnames:
     - payment.secure.svc.cluster.local
   rules:
-    - filter:
-        urlRewrite:
-          hostname: payment.secure.svc.cluster.local
+    - filters:
+        - urlRewrite:
+            hostname: payment.secure.svc.cluster.local
       backendRefs:
         - name: payment.secure.svc.cluster.local
           port: 8080
@@ -324,6 +324,7 @@ dummy service and the corresponding Endpoint object.
      name: mcw-cluster-1-target
      namespace: mcw
    spec:
+     clusterIP: None
      ports:
        - protocol: TCP
          port: 31111
@@ -342,7 +343,7 @@ dummy service and the corresponding Endpoint object.
    apiVersion: v1
    kind: Endpoints
    metadata:
-     name: mcw-cluster-1-target-endpoint
+     name: mcw-cluster-1-target
      namespace: mcw
    subsets:
      - addresses:
@@ -374,7 +375,7 @@ resources are created when importing the `payment.secure` service.
      selector:
        app.kubernetes.io/name: gateway
      ports:
-       - name: HTTP
+       - name: http
          protocol: TCP
          port: 8080
    ```
@@ -428,9 +429,9 @@ resources are created when importing the `payment.secure` service.
             path:
               type: PathPrefix
               value: /payment
-        filter:
-          urlRewrite:
-            hostname: payment.secure.svc.cluster.local
+        filters:
+          - urlRewrite:
+              hostname: payment.secure.svc.cluster.local
         backendRefs:
           - name: mcw-cluster-1-target
             namespace: mcw
