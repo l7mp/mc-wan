@@ -440,9 +440,9 @@ resources are created when importing the `payment.secure` service.
           - path:
               type: PathPrefix
               value: /stats
-        filter:
-          urlRewrite:
-            hostname: payment.secure.svc.cluster.local
+        filters:
+          - urlRewrite:
+              hostname: payment.secure.svc.cluster.local
         backendRefs:
           - name: mcw-cluster-1-target
             namespace: mcw
