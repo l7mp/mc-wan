@@ -337,11 +337,141 @@ land at one of the pods implementing the `payment.secure` service, in any of the
 
 ## L7 traffic management
 
-At this point, SD-WAN policies can be applied to individual services. To actually implement
-L7-level policies, a cluster administrator can manually inject an egress EW gateway with the
-necessary Gateway and HTTPRoute resources.
+Up to this point, we made sure SD-WAN policies can be applied to individual Kubernetes services,
+but there is no way to distinguish SD-WAN policies based on the API endpoint or certain HTTP header
+values. The below shows how to add L7 traffic management policies to the basic specification. At
+the moment it is not clear how to expose this functionality to the user, so we merely spec the
+barebones mechanics.
 
-### TODO
+### EW gateways
+
+On the ingress side there is no change. On the egress side, the following steps are done per each
+ServiceExport.
+ 
+1. We create a set of **dummy services** per each ServiceExport, one for each possible SD-WAN
+   policy. These dummy services can then be used as backends in Gateway resources later that
+   describe the egress L7 policies, in order to route the corresponding traffic to the
+   corresponding serving pods over the selected SD-WAN tunnel.
+
+   For the `payment.secure` service, the following dummy services are created. Note that these
+   services all live in a dedicated namespace called `mc-wan`, in order to avoid the pollution of
+   the `secure` namespace.
+   
+   ```yaml
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: payment-secure-sd-wan-priority-high
+     namespace: mc-wan
+   spec:
+     ports:
+     - name: payment-secure
+       protocol: TCP
+       port: 8080
+       targetPort: 31111
+   ---
+   apiVersion: v1
+   kind: Endpoints
+   metadata:
+     name: payment-secure-sd-wan-priority-high
+     namespace: mc-wan
+   subsets:
+     - addresses:
+         - ip: IP_1
+       ports:
+         - name: payment-secure
+           port: 31111
+           protocol: TCP
+   ---
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: payment-secure-sd-wan-priority-low
+     namespace: mc-wan
+   spec:
+     ports:
+     - name: payment-secure
+       protocol: TCP
+       port: 8080
+       targetPort: 31112
+   ---
+   apiVersion: v1
+   kind: Endpoints
+   metadata:
+     name: payment-secure-sd-wan-priority-low
+     namespace: mc-wan
+   subsets:
+     - addresses:
+         - ip: IP_1
+       ports:
+         - name: payment-secure
+           port: 31112
+           protocol: TCP
+   ```
+   
+1. We create an EW egress gateway that the user may configure by attaching the adequate HTTPRoutes
+   to it.
+
+   ```yaml
+   apiVersion: gateway.networking.k8s.io/v1beta1
+   kind: Gateway
+   metadata:
+     name: payment-clusterset
+     namespace: secure
+     annotations: 
+       networking.istio.io/service-type: ClusterIP
+   spec:
+     gatewayClassName: whatever
+     listeners:
+     - name: payment-secure
+       protocol: TCP
+       port: 8080
+       allowedRoutes:
+         namespaces:
+           from: Same
+   ```
+
+1. We create an HTTPRoute attached to this Gateway, which implements the L7 traffic management policy.
+
+   ```yaml
+   apiVersion: gateway.networking.k8s.io/v1beta1
+   kind: HTTPRoute
+   metadata:
+     name: payment-clusterset
+     namespace: secure
+   spec:
+     parentRefs:
+     - name: payment-clusterset
+     hostnames:
+       - payment-clusterset.secure.svc.cluster.local
+       - payment.secure.svc.cluster.local
+     rules:
+      - matches:
+          - method: GET
+            path:
+              type: PathPrefix
+              value: /payment
+        filters:
+          - urlRewrite:
+              hostname: payment.secure.svc.cluster.local
+        backendRefs:
+           -name: payment-secure-sd-wan-priority-high
+            namespace: mc-wan
+            port: 31111
+            weight: 1
+      - matches:
+          - path:
+              type: PathPrefix
+              value: /stats
+        filters:
+          - urlRewrite:
+              hostname: payment.secure.svc.cluster.local
+        backendRefs:
+          - name: payment-secure-sd-wan-priority-low
+            namespace: mc-wan
+            port: 31112
+            weight: 1
+     ```
 
 ## Resiliency
 
