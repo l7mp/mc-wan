@@ -10,8 +10,6 @@ observability and the security functions, for a consistent end-to-end user exper
 1. [Overview](#overview)
 1. [User stories](#user-stories)
 1. [Service-level traffic management](#service-level-traffic-management)
-   1. [Concepts](#concepts)
-   1. [Mechanics](#mechanics)
 1. [L7 traffic management](#l7-traffic-management)
 1. [License](#license)
 
@@ -339,19 +337,62 @@ land at one of the pods implementing the `payment.secure` service, in any of the
 
 Up to this point, we made sure SD-WAN policies can be applied to individual Kubernetes services,
 but there is no way to distinguish SD-WAN policies based on the API endpoint or certain HTTP header
-values. The below shows how to add L7 traffic management policies to the basic specification. At
-the moment it is not clear how to expose this functionality to the user, so we merely spec the
-barebones mechanics.
+values. The below shows how to add L7 traffic management policies to the basic specification. 
 
-### EW gateways
+### Concepts
+
+At the moment it is not clear how to expose the L7 traffic management functionality to the
+user. The below using a custom ServiceImport resource is one possible way; the important is that
+the underlying mechanics would be the same no matter what CRD we eventually choose (see below).
+
+Suppose the service consumer cluster wants to apply the following L7 policy for the
+`payment.secure` service: route GET queries to the `http://payment.secure:8080/payment` API
+endpoint over the high-priority SD-WAN tunnel, access to `http://payment.secure:8080/stats` should
+fall back to the low-priority tunnel, and all other access is denied. We use the
+`ServiceImport.mc-wan.l7mp.io` CRD, modeled based on the similarly named CRD from the
+[Multi-cluster Services
+API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api),
+for controlling L7-level access to exported services. 
+
+```yaml
+apiVersion: mc-wan.l7mp.io/v1alpha1
+kind: ServiceImport
+metadata:
+  name: payment
+  namespace: secure
+spec:
+  http:
+     rules:
+      - matches:
+          - method: GET
+            path:
+              type: PathPrefix
+              value: /payment
+        backendRefs:
+           -name: payment-secure-sd-wan-priority-high
+            namespace: mc-wan
+      - matches:
+          - path:
+              type: PathPrefix
+              value: /stats
+        backendRefs:
+          - name: payment-secure-sd-wan-priority-low
+            namespace: mc-wan
+```
+
+Here, one can use the "dummy services" `payment-secure-sd-wan-priority-high.mc-wan` to mean: "route
+the corresponding traffic to the `payment.secure` service over the SD-WAN policy
+`sd-wan-priority-high`, and likewise for the low-priority backend.
+
+### Mechanics
 
 On the ingress side there is no change. On the egress side, the following steps are done per each
 ServiceExport.
  
-1. We create a set of **dummy services** per each ServiceExport, one for each possible SD-WAN
-   policy. These dummy services can then be used as backends in Gateway resources later that
-   describe the egress L7 policies, in order to route the corresponding traffic to the
-   corresponding serving pods over the selected SD-WAN tunnel.
+1. We create a set of dummy services per each ServiceExport, one for each possible SD-WAN
+   policy. These dummy services can be used as backends in the Gateway resources that describe the
+   egress L7 policies, in order to route the corresponding traffic to the corresponding serving
+   pods over the selected SD-WAN tunnel.
 
    For the `payment.secure` service, the following dummy services are created. Note that these
    services all live in a dedicated namespace called `mc-wan`, in order to avoid the pollution of
@@ -367,8 +408,7 @@ ServiceExport.
      ports:
      - name: payment-secure
        protocol: TCP
-       port: 8080
-       targetPort: 31111
+       port: 31111
    ---
    apiVersion: v1
    kind: Endpoints
@@ -392,8 +432,7 @@ ServiceExport.
      ports:
      - name: payment-secure
        protocol: TCP
-       port: 8080
-       targetPort: 31112
+       port: 31112
    ---
    apiVersion: v1
    kind: Endpoints
@@ -409,8 +448,8 @@ ServiceExport.
            protocol: TCP
    ```
    
-1. We create an EW egress gateway that the user may configure by attaching the adequate HTTPRoutes
-   to it.
+1. We create an EW egress gateway to expose the imported service to the user; this will
+   automatically create the shadow service for us.
 
    ```yaml
    apiVersion: gateway.networking.k8s.io/v1beta1
@@ -431,7 +470,9 @@ ServiceExport.
            from: Same
    ```
 
-1. We create an HTTPRoute attached to this Gateway, which implements the L7 traffic management policy.
+1. We create an HTTPRoute attached to this Gateway, which implements the L7 traffic management
+   policy. The rules are copied almost verbatim from the ServiceImport, with some added
+   functionality to streamline the flow of traffic between clusters.
 
    ```yaml
    apiVersion: gateway.networking.k8s.io/v1beta1
@@ -457,7 +498,6 @@ ServiceExport.
         backendRefs:
            -name: payment-secure-sd-wan-priority-high
             namespace: mc-wan
-            port: 31111
             weight: 1
       - matches:
           - path:
@@ -469,9 +509,11 @@ ServiceExport.
         backendRefs:
           - name: payment-secure-sd-wan-priority-low
             namespace: mc-wan
-            port: 31112
             weight: 1
      ```
+
+     Here, the `weight` depends on the number of pods implementing the `payment.secure` service in
+     each cluster.
 
 ## Resiliency
 
