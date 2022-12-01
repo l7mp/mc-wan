@@ -11,7 +11,8 @@ observability and the security functions, for a consistent end-to-end user exper
 1. [User stories](#user-stories)
 1. [Service-level traffic management](#service-level-traffic-management)
 1. [L7 traffic management](#l7-traffic-management)
-1. [Mechanics](#mechanics)
+1. [Resiliency](#resiliency)
+1. [Observability](#observability)
 1. [License](#license)
 
 ## Overview
