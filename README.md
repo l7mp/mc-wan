@@ -84,7 +84,7 @@ name: sd-wan-priority-high
 spec:
   tunnel: business
   port: 31111
-  slas:
+  sla:
     - jitter-ms: 50
     - latency-ms: 100
     - loss-percent: 10
@@ -96,7 +96,7 @@ metadata:
 spec:
   tunnel: default
   port: 31112
-  slas:
+  sla:
     - jitter-ms: 1000
     - latency-ms: 1000
     - loss-percent: 100
@@ -195,9 +195,10 @@ resusing the above ServiceImport/ServiceExport CRs.
 ### Server-side L7 policies
 
 Suppose the service owner wants to filter incoming requests on the HTTP header: to the path
-`/payment` only `GET` requests are allows, everything else is denied. Assuming the server-side
+`/payment` only `GET` requests are allowed, everything else is denied. Assuming the server-side
 cluster runs Istio, the below VirtualService should do the trick (the below assumes the default
-`spec.gateways: mesh` so it will go to all sidecars running the `payment.secure` service).
+`spec.gateways: mesh` so the L7 policy will be enforced at all pods running the `payment.secure`
+service).
 
 ``` yaml
 apiVersion: networking.istio.io/v1beta1
@@ -255,9 +256,9 @@ spec:
         host: payment-v1.secure.svc.clusterset.local
 ```
 
-Note that the VirtualServices use the ServiceImport FQDNs as `destination` services, so once we
+Note that the VirtualService uses the ServiceImport FQDNs as `destination` services, so once we
 have the SD-WAN compatible ServiceImport/ServiceExport logics we do not have to add additional L7
-support.
+support, just rely on Istio to provide us the required L7 capabilities.
 
 Another possibility is to route requests from the clients over different SD-WAN tunnels depending
 on the HTTP headers. For instance, only GET requests to the `/payment` path would be routed to the
