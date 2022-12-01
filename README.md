@@ -11,6 +11,7 @@ observability and the security functions, for a consistent end-to-end user exper
 1. [User stories](#user-stories)
 1. [Service-level traffic management](#service-level-traffic-management)
 1. [L7 traffic management](#l7-traffic-management)
+1. [Mechanics](#mechanics)
 1. [License](#license)
 
 ## Overview
@@ -66,11 +67,44 @@ In the simplest model, the service owner can associate SD-WAN policies at the le
 distinct Kubernetes service, but there is no way to impose additional L7-level SD-WAN policies on
 top. This basic model will then be extended to a fully-fledged L7 model later.
 
-### Concepts
+### WAN policies
 
-Below we describe the high-level EW Gateway API we expose to the cluster operators.
+Each global service can have a WAN policy associated with it (see below). The SD-WAN policies are
+defined by a CRD named `WANPolicy.mcw.l7mp.io`.  The format of this CRD is completely unspecified
+for now; below is a sample that is enough for the purposes of this note. At this point the best
+option seems to be if we make these CRDs cluster-global, to avoid that WAN policies installed into
+different namespaces somehow end up conflicting.
 
-#### Service export
+```yaml
+apiVersion: mcw.l7mp.io/v1alpha1
+kind: WANPolicy
+metadata:
+name: sd-wan-priority-high
+spec:
+  tunnel: business
+  port: 31111
+  slas:
+    - jitter-ms: 50
+    - latency-ms: 100
+    - loss-percent: 10
+---
+apiVersion: mcw.l7mp.io/v1alpha1
+kind: WANPolicy
+metadata:
+  name: sd-wan-priority-low
+spec:
+  tunnel: default
+  port: 31112
+  slas:
+    - jitter-ms: 1000
+    - latency-ms: 1000
+    - loss-percent: 100
+```
+
+Note that the same WANPolicy CRs must exist on all clusters attached to the clusterset and they
+must specify the same SLAs/ports.
+
+### Service export
 
 In order to allow access from other clusters, a service has to be explicitly exported from the
 hosting cluster. 
@@ -92,17 +126,19 @@ spec:
     protocol: TCP
 ```
 
-We use the `ServiceExport.mc-wan.l7mp.io` CRD, modeled based on the similarly named CRD from the
+One can use the `ServiceExport.multicluster.k8s.io` CRD from the similarly named CRD from the
 [Multi-cluster Services
-API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api),
+API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api)
 for controlling exported services. The only difference is that our ServiceExports can contain
 additional annotations to encode the SD-WAN policy assigned by the service owner to the exported
 service.
 
-Below is sample ServiceExport for exporting the `payment.secure` service from cluster-1:
+One possible way to do that is to explicitly specify the SD-WAN tunnel we want the service to be
+assigned to. Below is sample ServiceExport for exporting the `payment.secure` service from
+cluster-1 over the SD-WAN tunnel `sd-wan-priority-high`.
 
 ```yaml
-apiVersion: mc-wan.l7mp.io/v1alpha1
+apiVersion: multicluster.k8s.io/v1alpha1
 kind: ServiceExport
 metadata:
   name: payment
@@ -111,417 +147,199 @@ metadata:
     mcw.l7mp.io/mc-wan-policy: sd-wan-priority-high
 ```
 
-Note that the name/namespace of the ServiceExport is the same as that of the service to be
-exported. Note further that the service owner can add the L7 policies on top of this service export
-by installing a set of [Gateway and
-HTTPRouteRule](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1beta1.HTTPRouteRule)
-resources in the exporting cluster. The SD-WAN policy is specified using the
-`mcw.l7mp.io/mc-wan-policy: sd-wan-priority-high` annotation: this selects the tunnel associated
-with the `sd-wan-priority-high` SD-WAN policy for exchanging all traffic of the `payment.secure`
-service across the SD-WAN. The SD-WAN policies will be specified by a separate CRD below. Note that
-we cannot enforce these priorities on the receiver side (by the time we receive the request on the
-ingress EW gateway it has already passed via the SD-WAN), so the SD-WAN priorities will be enforced
-on the sender side.
+The name/namespace of the ServiceExport must the same as that of the service to be exported. The
+SD-WAN policy is specified using the `mcw.l7mp.io/mc-wan-policy: sd-wan-priority-high` annotation;
+this selects the tunnel associated with the `sd-wan-priority-high` SD-WAN policy for exchanging all
+traffic of the `payment.secure` service across the SD-WAN. The SD-WAN policies will be specified by
+a separate CRD below. Note that we cannot enforce these priorities on the receiver side (by the
+time we receive the request on the ingress EW gateway it has already passed via the SD-WAN), so the
+SD-WAN priorities will be enforced on the sender side.
 
-#### Service import
+### Service import
 
 An exported service will be imported only by clusters in which the service's namespace
-exists. Service imports are represented with a CRD `ServiceImport.mc-wan.l7mp.io`, which is
+exists. Service imports are represented with a CRD `ServiceImport.multicluster.k8s.io`, which is
 identical to the similarly named CRD from the [Multi-cluster Services
 API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api). The
 CRD is automatically created in the importing cluster and the control plane is supposed to be fully
 responsible for the lifecycle of a ServiceImport.
 
-#### WAN policies
-
-ServiceExport resources may associate a WAN policy for the exported service via an annotation. The
-SD-WAN policies are defined by a CRD named `WANPolicy.mcw.l7mp.io`.  The format of this CRD is
-completely unspecified for now; below is a sample that is enough for the purposes of this note. At
-this point the best option seems to be if we make these CRDs cluster-global, to avoid that WAN
-policies installed into different namespaces somehow end up conflicting.
+A sample ServiceImport corresponding to the above ServiceExport is shown below.
 
 ```yaml
-apiVersion: mcw.l7mp.io/v1alpha1
-kind: WANPolicy
-metadata:
-name: sd-wan-priority-high
-spec:
-  tunnel: business
-  port: 31111
----
-apiVersion: mcw.l7mp.io/v1alpha1
-kind: WANPolicy
-metadata:
-  name: sd-wan-priority-low
-spec:
-  tunnel: default
-  port: 31112
----
-apiVersion: mcw.l7mp.io/v1alpha1
-kind: WANPolicy
-metadata:
-  name: sd-wan-priority-internet
-spec:
-  tunnel: ""
-  port: 31113
-```
-
-In a full design we may write the requested SLAs here, or we may classify on the SNI on the SD-WAN
-side, or anything else the SD-WAN will be able to enforce.
-
-### Mechanics
-
-We deconstruct our ServiceImports and ServiceExports to actual Kubernetes resources/objects and use
-existing implementations to encode the policies in our EW gateways. WANPolicy resources do not
-appear explicitly in any of the gateway pipelines; these resources are purely virtual and serve
-only (1) for the user to be able to indicate the chosen WAN policy in service exports and (2) for
-the control plane to drive the selection of the destination port in the egress gateway pipeline
-(see below).
-
-#### Interconnect fabric: SD-WAN
-
-For each SD-WAN priority level (say, `business` and `default`), we enforce a separate HTTP(s) EW-EW
-HTTP(S) session. (They must be separate otherwise if everything goes over a single HTPP(S) stream
-then the SD-WAN may not be able to classify the inter-cluster traffic to apply the forwarding
-preferences.)
-
-We apply the following rules.
-* All **SD-WAN priority levels (i.e., tunnels) are wrapped by a WANPolicy CRD** that specifies the
-  port used for sending traffic over the SD-WAN with that priority (say, 31111 for high-prio
-  traffic).
-* All access to the receiver side EW-gateway that is to receive high priority on the SD-WAN **uses
-  some predefined port** that we specify in the corresponding WANPolicy resource. We may define a
-  separate port for traffic that is to be exchanged over the Internet.
-* **Each per-cluster pod IP range is routed through the SD-WAN**: any time a pod from one cluster
-  sends a packet to a pod in another cluster, that packet is routed through the SD-WAN.
-
-We assume the SD-WAN is bootstrapped with appropriate per-destination-port application-aware
-routing policies and routing table entries as per the above.
-
-#### EW gateways
-
-We use a standard [Kubernetes gateway
-implementation](https://gateway-api.sigs.k8s.io/implementations) that supports a sufficiently broad
-subset of the Gateway API. Maybe the best choice would be
-[Istio](https://istio.io/latest/docs/tasks/traffic-management/ingress/gateway-api); that way we
-could use further service-mesh functionality *inside the clusters* as well.
-
-We assume that the EW gateway pods are labeled with `app.kubernetes.io/name: gateway` or whatever
-the implementation we choose uses for this purpose. Note further that some Gateway API
-implementations automatically wrap all Gateways with a LoadBalancer service to make them available
-from outside the cluster. We will have to stop the implementation from doing that otherwise our EW
-gateways will be exposed to the Internet, which is definitely not what we want. For instance,
-adding the annotation `networking.istio.io/service-type: ClusterIP` will make sure that the
-services Istio creates are of type ClusterIP (so not available externally).
-
-##### Ingress EW gateway pipeline
-
-The ingress gateway pipeline contains the necessary Kubernetes resources for the receiving side
-cluster to ingest inter-cluster traffic from the SD-WAN for the `payment.secure` service exported
-from the cluster.
-
-1. Create an ingress EW gateway for the `payment.secure` service. We assume that the Gateway API
-   implementation will *not* expose these Gateway listeners to the Internet. Instead, we create our
-   own Services and ServiceExports that make sure that the services are available only *between*
-   the clusters, but not from the Internet.
-
-   ```yaml
-   apiVersion: gateway.networking.k8s.io/v1beta1
-   kind: Gateway
-   metadata:
-     name: payment-ingress
-     namespace: secure
-     annotations: 
-       networking.istio.io/service-type: ClusterIP
-   spec:
-     gatewayClassName: whatever
-     listeners:
-     - name: sd-wan-priority-high
-       protocol: HTTP
-       port: 31111
-       allowedRoutes:
-         namespaces:
-           from: Same
-     - name: sd-wan-priority-low
-       protocol: HTTP
-       port: 31112
-       allowedRoutes:
-         namespaces:
-           from: Same
-   ```
-
-   Since the SD-WAN policy associated with the service is `sd-wan-priority-high`, we look up the
-   identically names WANPolicy and install the listener at the corresponding port (31111). Note
-   that we expose the gateway on all SD-WAN ports, this will make it possible for the egress side
-   to reuse the gateway to implement L7 traffic management policies.
-
-1. Add a
-   [HTTPRoute](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1beta1.HTTPRoute)
-   to the Gateway, that will route the requests received on the `payment-ingress.secure` Gateway 
-   resource, which we attach to the above ingress EW Gateway (`mcw-ingress-gateway`).
-
-   ```yaml
-   apiVersion: gateway.networking.k8s.io/v1beta1
-   kind: HTTPRoute
-   metadata:
-     name: payment-ingress
-     namespace: secure
-   spec:
-     parentRefs:
-     - name: payment-ingress
-       namespace: secure
-     hostnames:
-       - payment.secure.svc.cluster.local
-     rules:
-       - filters:
-           - urlRewrite:
-               hostname: payment.secure.svc.cluster.local
-         backendRefs:
-           - name: payment
-             namespace: secure
-             port: 8080
-   ```
-
-   The `http.rules` rewrites the `hostname` to the original name of the target service and sets the
-   `backendRefs` to refer to the exported service `payment.secure` over port 8080.
-
-##### Egress EW gateway pipeline
-
-The egress gateway pipeline should contain the necessary Kubernetes resources for the sender side
-cluster to send traffic over the SD-WAN to the receiver side for the services that are imported
-into the cluster. The nice thing in this model that there is no need to explicitly create anything
-on the egress side, since the [Multi-cluster Services
-API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api)
-implementation will automatically create the necessary ServiceImport in each cluster that will
-route queries to the ingress gateway on the exporting side. When no MCS support is available, we
-may create a set of identical shadow Service and Endpoint resources to implement the ServiceImport
-semantics.
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: payment-clusterset
-  namespace: secure
-spec:
-  ports:
-  - name: payment-secure
-    protocol: TCP
-    port: 8080
-    targetPort: 31111
----
-apiVersion: v1
-kind: Endpoints
-metadata:
-  name: payment-clusterset
-  namespace: secure
-subsets:
-  - addresses:
-      - ip: IP_1
-    ports:
-      - name: payment-secure
-        port: 31111
-        protocol: TCP
-```
-
-Here, the Service must be selector-less, so that we ourselves provide our own Endpoint object that
-backs the service, and the list the IP address map to the IPs of the ingress EW gateway pods (the
-IP addresses of the `payment-ingress.secure` EW gateway in cluster-1 in our case, i.e., `IP_1`).
-Note that only those clusters would receive requests from that actually (1) export the
-corresponding service and (2) have healthy backend pods for the service.
-
-From this point, querying the `http://payment-clusterset.secure.svc.cluster.local:8080` URL will
-land at one of the pods implementing the `payment.secure` service, in any of the attached clusters.
-
-## L7 traffic management
-
-Up to this point, we made sure SD-WAN policies can be applied to individual Kubernetes services,
-but there is no way to distinguish SD-WAN policies based on the API endpoint or certain HTTP header
-values. The below shows how to add L7 traffic management policies to the basic specification. 
-
-### Concepts
-
-At the moment it is not clear how to expose the L7 traffic management functionality to the
-user. The below using a custom ServiceImport resource is one possible way; the important is that
-the underlying mechanics would be the same no matter what CRD we eventually choose (see below).
-
-Suppose the service consumer cluster wants to apply the following L7 policy for the
-`payment.secure` service: route GET queries to the `http://payment.secure:8080/payment` API
-endpoint over the high-priority SD-WAN tunnel, access to `http://payment.secure:8080/stats` should
-fall back to the low-priority tunnel, and all other access is denied. We use the
-`ServiceImport.mc-wan.l7mp.io` CRD, modeled based on the similarly named CRD from the
-[Multi-cluster Services
-API](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api),
-for controlling L7-level access to exported services. 
-
-```yaml
-apiVersion: mc-wan.l7mp.io/v1alpha1
+apiVersion: multicluster.k8s.io/v1alpha1
 kind: ServiceImport
 metadata:
   name: payment
   namespace: secure
 spec:
-  http:
-     rules:
-      - matches:
-          - method: GET
-            path:
-              type: PathPrefix
-              value: /payment
-        backendRefs:
-           -name: payment-secure-sd-wan-priority-high
-            namespace: mc-wan
-      - matches:
-          - path:
-              type: PathPrefix
-              value: /stats
-        backendRefs:
-          - name: payment-secure-sd-wan-priority-low
-            namespace: mc-wan
+  type: ClusterSetIP
+  ports:
+  - name: http
+    protocol: TCP
+    port: 8080
 ```
 
-Here, one can use the "dummy services" `payment-secure-sd-wan-priority-high.mc-wan` to mean: "route
-the corresponding traffic to the `payment.secure` service over the SD-WAN policy
-`sd-wan-priority-high`, and likewise for the low-priority backend.
 
-### Mechanics
+At this point, the exported `payment.secure` service can be reached from the importing cluster by
+issuing a HTTP request to the host `payment.secure.svc.clusterset.local`.
 
-On the ingress side there is no change. On the egress side, the following steps are done per each
-ServiceExport.
- 
-1. We create a set of dummy services per each ServiceExport, one for each possible SD-WAN
-   policy. These dummy services can be used as backends in the Gateway resources that describe the
-   egress L7 policies, in order to route the corresponding traffic to the corresponding serving
-   pods over the selected SD-WAN tunnel.
+## L7 traffic management
 
-   For the `payment.secure` service, the following dummy services are created. Note that these
-   services all live in a dedicated namespace called `mc-wan`, in order to avoid the pollution of
-   the `secure` namespace.
-   
-   ```yaml
-   apiVersion: v1
-   kind: Service
-   metadata:
-     name: payment-secure-sd-wan-priority-high
-     namespace: mc-wan
-   spec:
-     ports:
-     - name: payment-secure
-       protocol: TCP
-       port: 31111
-   ---
-   apiVersion: v1
-   kind: Endpoints
-   metadata:
-     name: payment-secure-sd-wan-priority-high
-     namespace: mc-wan
-   subsets:
-     - addresses:
-         - ip: IP_1
-       ports:
-         - name: payment-secure
-           port: 31111
-           protocol: TCP
-   ---
-   apiVersion: v1
-   kind: Service
-   metadata:
-     name: payment-secure-sd-wan-priority-low
-     namespace: mc-wan
-   spec:
-     ports:
-     - name: payment-secure
-       protocol: TCP
-       port: 31112
-   ---
-   apiVersion: v1
-   kind: Endpoints
-   metadata:
-     name: payment-secure-sd-wan-priority-low
-     namespace: mc-wan
-   subsets:
-     - addresses:
-         - ip: IP_1
-       ports:
-         - name: payment-secure
-           port: 31112
-           protocol: TCP
-   ```
-   
-1. We create an EW egress gateway to expose the imported service to the user; this will
-   automatically create the shadow service for us.
+Up to this point, SD-WAN policies could be applied to individual Kubernetes services only, but
+there is no way to distinguish SD-WAN policies based on the API endpoint or certain HTTP header
+values. The below shows how to add L7 traffic management policies to the basic specification by
+resusing the above ServiceImport/ServiceExport CRs.
 
-   ```yaml
-   apiVersion: gateway.networking.k8s.io/v1beta1
-   kind: Gateway
-   metadata:
-     name: payment-clusterset
-     namespace: secure
-     annotations: 
-       networking.istio.io/service-type: ClusterIP
-   spec:
-     gatewayClassName: whatever
-     listeners:
-     - name: payment-secure
-       protocol: TCP
-       port: 8080
-       allowedRoutes:
-         namespaces:
-           from: Same
-   ```
+### Server-side L7 policies
 
-1. We create an HTTPRoute attached to this Gateway, which implements the L7 traffic management
-   policy. The rules are copied almost verbatim from the ServiceImport, with some added
-   functionality to streamline the flow of traffic between clusters.
+Suppose the service owner wants to filter incoming requests on the HTTP header: to the path
+`/payment` only `GET` requests are allows, everything else is denied. Assuming the server-side
+cluster runs Istio, the below VirtualService should do the trick (the below assumes the default
+`spec.gateways: mesh` so it will go to all sidecars running the `payment.secure` service).
 
-   ```yaml
-   apiVersion: gateway.networking.k8s.io/v1beta1
-   kind: HTTPRoute
-   metadata:
-     name: payment-clusterset
-     namespace: secure
-   spec:
-     parentRefs:
-     - name: payment-clusterset
-     hostnames:
-       - payment-clusterset.secure.svc.cluster.local
-       - payment.secure.svc.cluster.local
-     rules:
-      - matches:
-          - method: GET
-            path:
-              type: PathPrefix
-              value: /payment
-        filters:
-          - urlRewrite:
-              hostname: payment.secure.svc.cluster.local
-        backendRefs:
-           -name: payment-secure-sd-wan-priority-high
-            namespace: mc-wan
-            weight: 1
-      - matches:
-          - path:
-              type: PathPrefix
-              value: /stats
-        filters:
-          - urlRewrite:
-              hostname: payment.secure.svc.cluster.local
-        backendRefs:
-          - name: payment-secure-sd-wan-priority-low
-            namespace: mc-wan
-            weight: 1
-     ```
+``` yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: payment
+  namespace: secure
+spec:
+  hosts:
+  - payment.secure.svc.cluster.local
+  - payment.secure.svc.clusterset.local
+  http:
+  - match:
+    - uri:
+        prefix: "/payment"
+      scheme:
+        exact: GET
+    route:
+    - destination:
+        host: payment.secure.svc.clusterset.local
+```
 
-     Here, the `weight` depends on the number of pods implementing the `payment.secure` service in
-     each cluster.
+### Client-side L7 policies
+
+Suppose the client consuming the `payment.secure` in the importing cluster wishes to apply
+additional L7 policies: e.g., for supporting canary deployment for the `payment.secure`
+service. Suppose the `prod` cluster exports the service `payment-v1.secure` that runs the stable
+version of the backend software (this will create a ServiceImport with the FQDN
+`payment-v1.secure.svc.clusterset.local` on the client side), while the `dev` cluster exports the
+experimental service `payment-v2.secure` (with the ServiceImport FQDN
+`payment-v2.secure.svc.clusterset.local` on the client side). In this case the following will
+VirtualService on the importing side will send all requests containing the cookie `user=test` to
+the v2 service, and everything else to the v1 service (again assuming Istio).
+
+``` yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: payment
+  namespace: secure
+spec:
+  hosts:
+  - payment.secure.svc.cluster.local
+  - payment.secure.svc.clusterset.local
+  http:
+  - match:
+      headers:
+        cookie:
+          regex: "^(.*?;)?(user=test)(;.*)?"
+    route:
+    - destination:
+        host: payment-v2.secure.svc.cluster.local
+  - route:
+    - destination:
+        host: payment-v1.secure.svc.clusterset.local
+```
+
+Note that the VirtualServices use the ServiceImport FQDNs as `destination` services, so once we
+have the SD-WAN compatible ServiceImport/ServiceExport logics we do not have to add additional L7
+support.
+
+Another possibility is to route requests from the clients over different SD-WAN tunnels depending
+on the HTTP headers. For instance, only GET requests to the `/payment` path would be routed to the
+high-priority tunnel, everything else should go the low-prio tunnel. 
+
+First, the server-side cluster must export two services, one over each SD-WAN tunnel, as follows:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-high-prio
+  namespace: secure
+spec:
+  selector:
+    app: payment
+  ports:
+  - port: 8080
+    protocol: TCP
+---
+apiVersion: multicluster.k8s.io/v1alpha1
+kind: ServiceExport
+metadata:
+  name: payment-high-prio
+  namespace: secure
+  annotations:
+    mcw.l7mp.io/mc-wan-policy: sd-wan-priority-high
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-low-prio
+  namespace: secure
+spec:
+  selector:
+    app: payment
+  ports:
+  - port: 8080
+    protocol: TCP
+---
+apiVersion: multicluster.k8s.io/v1alpha1
+kind: ServiceExport
+metadata:
+  name: payment-low-prio
+  namespace: secure
+  annotations:
+    mcw.l7mp.io/mc-wan-policy: sd-wan-priority-low
+```
+
+Then, these will create two ServiceImports on the client-side, one with the FQDN
+`payment-high-prio.secure.svc.clusterset.local` that will be routed via the high-priority tunnel
+and another one with the FQDN `payment-low-prio.secure.svc.clusterset.local` that will be routed to
+the low-prio tunnel. These ServiceImports can again be used as destinations for the
+VirtualServices.
+
+``` yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: payment
+  namespace: secure
+spec:
+  hosts:
+  - payment.secure.svc.cluster.local
+  - payment.secure.svc.clusterset.local
+  http:
+  - match:
+    - uri:
+        prefix: "/payment"
+      scheme:
+        exact: GET
+    route:
+    - destination:
+        host: payment-high-prio.secure.svc.cluster.local
+  - route:
+    - destination:
+        host: payment-low-prio.secure.svc.clusterset.local
+```
 
 ## Resiliency
 
-Implementing health-check/retry/timeout/circuit-breaking policies is subject to the appearance of
-the corresponding features in the Gateway API. Some
-[thinking](https://github.com/kubernetes-sigs/gateway-api/issues/97) is already going on in that
-direction: once these APIs become available it is straightforward to add them to our ServiceImport
-and ServiceExport CRDs.
+Implementing health-check/retry/timeout/circuit-breaking policies can supported via the L7
+capabilities provided by Istio's L7 traffic management policies.
 
 ## Observability
 
