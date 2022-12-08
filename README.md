@@ -248,7 +248,7 @@ spec:
           regex: "^(.*?;)?(user=test)(;.*)?"
     route:
     - destination:
-        host: payment-v2.secure.svc.cluster.local
+        host: payment-v2.secure.svc.clusterset.local
   - route:
     - destination:
         host: payment-v1.secure.svc.clusterset.local
@@ -320,7 +320,6 @@ metadata:
   namespace: secure
 spec:
   hosts:
-  - payment.secure.svc.cluster.local
   - payment.secure.svc.clusterset.local
   http:
   - match:
@@ -330,7 +329,7 @@ spec:
         exact: GET
     route:
     - destination:
-        host: payment-high-prio.secure.svc.cluster.local
+        host: payment-high-prio.secure.svc.clusterset.local
   - route:
     - destination:
         host: payment-low-prio.secure.svc.clusterset.local
