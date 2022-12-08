@@ -208,7 +208,6 @@ metadata:
   namespace: secure
 spec:
   hosts:
-  - payment.secure.svc.cluster.local
   - payment.secure.svc.clusterset.local
   http:
   - match:
@@ -218,7 +217,7 @@ spec:
         exact: GET
     route:
     - destination:
-        host: payment.secure.svc.clusterset.local
+        host: payment.secure.svc.cluster.local
 ```
 
 ### Client-side L7 policies
@@ -241,7 +240,6 @@ metadata:
   namespace: secure
 spec:
   hosts:
-  - payment.secure.svc.cluster.local
   - payment.secure.svc.clusterset.local
   http:
   - match:
