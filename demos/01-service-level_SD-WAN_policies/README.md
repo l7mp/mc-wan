@@ -139,13 +139,15 @@ kubectl exec -it $(kubectl get pods -o custom-columns=":metadata.name" | grep ne
 ```console
 while [ true ]; do kubectl exec -it $(kubectl get pods -o custom-columns=":metadata.name" | grep net-debug-nonhost) -- curl -sS -H "Host: payment-secure.default.svc.clusterset.local" http://payment-secure.default.svc.cluster.local:8000 -o /dev/null; done
 ```
-
 - Observe metrics on the vManage UI:
 Navigate to *Monitor/Network*, and select a vEdge instance. Click on *Interface*, then select *Real Time* over the graph.
 
 In case of `payment-secure`, We expect to see traffic on *Business Internet*.
+![Measurement Results of 'payment-secure'](measure-secure.png)
 
 For `payment-insecure`, repeat these steps, but generate traffic as:
 ```console
 while [ true ]; do kubectl exec -it $(kubectl get pods -o custom-columns=":metadata.name" | grep net-debug-nonhost) -- curl -sS -H "Host: payment-insecure.default.svc.clusterset.local" http://payment-insecure.default.svc.cluster.local:8000 -o /dev/null; done
 ```
+This time the traffic goes on *Public Internet*.
+![Measurement Results of 'payment-insecure'](measure-insecure.png)
