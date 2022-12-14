@@ -59,9 +59,67 @@ kubectl apply -f yaml/4-shadow-svc.yaml
 
 5. Configure SD-WAN policies
 
-*TODO*
+A simple port-based configuration is sufficient. In this demo the traffic on port 31111 goes to business internet, while port 31112 goes on public internet. This is in sync with the [gateway configuration](yaml/2-gw.yaml). An example configuration:
 
-### Testing and Demo
+```
+viptela-policy:policy
+ app-route-policy _vpn_cnwan_policies_mc-wan
+  vpn-list vpn_cnwan_policies
+    sequence 1
+     match
+      source-port 31111
+      source-ip 0.0.0.0/0
+     !
+     action
+      backup-sla-preferred-color biz-internet
+     !
+    !
+    sequence 11
+     match
+      destination-port 31111
+      source-ip 0.0.0.0/0
+     !
+     action
+      backup-sla-preferred-color biz-internet
+     !
+    !
+    sequence 21
+     match
+      source-port 31112
+      source-ip 0.0.0.0/0
+     !
+     action
+      backup-sla-preferred-color public-internet
+     !
+    !
+    sequence 31
+     match
+      destination-port 31112
+      source-ip 0.0.0.0/0
+     !
+     action
+      backup-sla-preferred-color public-internet
+     !
+    !
+ !
+ lists
+  site-list sites_cnwan_policies
+   site-id 100
+   site-id 111
+  !
+  vpn-list vpn_cnwan_policies
+   vpn 1
+  !
+ !
+!
+apply-policy
+ site-list sites_cnwan_policies
+  app-route-policy _vpn_cnwan_policies_mc-wan
+ !
+!
+```
+
+### Test and Demo
 
 6. Deploy a client into **cluster1** with [yaml/0-net-debug.yaml](yaml/0-net-debug.yaml). In this demo we use curl in [net-debug](https://github.com/l7mp/net-debug).
 
