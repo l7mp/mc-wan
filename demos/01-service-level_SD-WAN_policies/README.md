@@ -2,8 +2,8 @@
 
 ## User Story
 
-The `payment-secure` HTTP service (port 8000), deployed into cluster-2, serves sensitive data, so the service owner in cluster-2 wants to secure access to this service, by forcing all queries/responses to this service to be sent over the SD-WAN interconnect in the fastest and most secure way. At the same time, the
-`payment-insecure` service serves less-sensitive bulk traffic (e.g., logging) , so the corresponding traffic exchange defaults to the Internet.
+The `payment-secure` HTTP service (port 8000), deployed into **cluster2**, serves sensitive data, so the service owner in **cluster2** wants to secure access to this service, by forcing all queries/responses to this service to be sent over the SD-WAN interconnect in the fastest and most secure way. At the same time, the
+`payment-insecure` service serves less-sensitive bulk traffic (*e.g.*, logging) , so the corresponding traffic exchange defaults to the Internet.
 
 ## Setup
 
@@ -64,7 +64,7 @@ kubectl apply -f yaml/4-shadow-svc.yaml
 
 ### Testing and Demo
 
-6. Create a client deployment on **cluster1** with [yaml/0-net-debug.yaml](yaml/0-net-debug.yaml)
+6. Deploy a client into **cluster1** with [yaml/0-net-debug.yaml](yaml/0-net-debug.yaml). In this demo we use curl in [net-debug](https://github.com/l7mp/net-debug).
 
 ```console
 kubectl apply -f yaml/0-net-debug.yaml
