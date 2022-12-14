@@ -2,12 +2,15 @@
 
 ## User Story
 
-The `payment-secure` HTTP service (port 8000), deployed into **cluster2**, serves sensitive data, so the service owner in **cluster2** wants to secure access to this service, by forcing all queries/responses to this service to be sent over the SD-WAN interconnect in the fastest and most secure way. At the same time, the
-`payment-insecure` service serves less-sensitive bulk traffic (*e.g.*, logging) , so the corresponding traffic exchange defaults to the Internet.
+The `payment-secure` HTTP service (port 8000), deployed into **cluster2**, serves sensitive data, so the service owner in **cluster2** wants to secure access to this service, by forcing all queries/responses to this service to be sent over the SD-WAN interconnect in the fastest and most secure way. At the same time, the `payment-insecure` service serves less-sensitive bulk traffic (*e.g.*, logging) , so the corresponding traffic exchange defaults to the Internet.
 
 ## Setup
 
 We have two k8s clusters interconnected with SD-WAN.
+
+The SD-WAN is configured with two SLA class: *Business Internet* (fastest and most secure) and *Public Internet* (best-effort).
+
+The clusters are installed with k8s (v1.25) and Istio (v1.16.0).
 
 ```
   +------------SD-WAN-------------+
@@ -19,10 +22,6 @@ We have two k8s clusters interconnected with SD-WAN.
  |    k8s     |      |    k8s     |
  +------------+      +------------+
 ```
-
-Both clusters are installed with:
-- k8s (v1.25)
-- Istio (v1.16.0)
 
 ## Steps
 
@@ -76,10 +75,19 @@ kubectl apply -f yaml/0-net-debug.yaml
 kubectl exec -it $(kubectl get pods -o custom-columns=":metadata.name" | grep net-debug-nonhost) -- curl -v -I -H "Host: payment-secure.default.svc.clusterset.local" http://payment-secure.default.svc.cluster.local:8000
 ```
 
-8. Do a volumetric measurement to check proper SD-WAN tunneling:
+8. Do a volumetric measurement to check proper SD-WAN configuration:
 
-- Generate test traffic
+- Generate test traffic on *cluster1*:
 ```console
 while [ true ]; do kubectl exec -it $(kubectl get pods -o custom-columns=":metadata.name" | grep net-debug-nonhost) -- curl -sS -H "Host: payment-secure.default.svc.clusterset.local" http://payment-secure.default.svc.cluster.local:8000 -o /dev/null; done
 ```
-- Observe metrics on the vManage UI
+
+- Observe metrics on the vManage UI:
+Navigate to *Monitor/Network*, and select a vEdge instance. Click on *Interface*, then select *Real Time* over the graph.
+
+In case of `payment-secure`, We expect to see traffic on *Business Internet*.
+
+For `payment-insecure`, repeat these steps, but generate traffic as:
+```console
+while [ true ]; do kubectl exec -it $(kubectl get pods -o custom-columns=":metadata.name" | grep net-debug-nonhost) -- curl -sS -H "Host: payment-insecure.default.svc.clusterset.local" http://payment-insecure.default.svc.cluster.local:8000 -o /dev/null; done
+```
