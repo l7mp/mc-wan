@@ -1,0 +1,17 @@
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: payment-ingress
+  namespace: default
+spec:
+  parentRefs:
+  - name: payment-ingress
+    namespace: default
+  hostnames:
+    - payment.default.svc.clusterset.local
+    - payment-secure.default.svc.clusterset.local
+    - payment-insecure.default.svc.clusterset.local
+  rules:
+    - backendRefs:
+        - name: payment
+          port: 8000
