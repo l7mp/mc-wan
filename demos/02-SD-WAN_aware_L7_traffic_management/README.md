@@ -56,7 +56,7 @@ Navigate to *Monitor/Network*, and select a vEdge instance. Click on *Interface*
 
 In case of `/anything`, We expect to see traffic on *Business Internet*.
 
-*TODO add fig*
+![Measurement Results: Matching L7 Rule](measure-secure.png)
 
 For `payment-insecure`, repeat these steps, but generate traffic as:
 ```console
@@ -65,4 +65,4 @@ while [ true ]; do kubectl exec -it $(kubectl get pods -o custom-columns=":metad
 
 This time the traffic goes on *Public Internet*.
 
-*TODO add fig*
+![Measurement Results: Not Matching L7 Rule](measure-insecure.png)
