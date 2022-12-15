@@ -191,7 +191,7 @@ issuing a HTTP request to the host `payment.secure.svc.clusterset.local`.
 Up to this point, SD-WAN policies could be applied to individual Kubernetes services only, but
 there is no way to distinguish SD-WAN policies based on the API endpoint or certain HTTP header
 values. The below shows how to add L7 traffic management policies to the basic specification by
-resusing the above ServiceImport/ServiceExport CRs.
+reusing the above ServiceImport/ServiceExport CRs.
 
 ### Server-side L7 policies
 
@@ -361,9 +361,9 @@ ServiceImport/ServiceExport CRDs.
 
 It is assumed two Kubernetes clusters are available, Istio with the built-in [Gateway API
 implementation](https://istio.io/latest/docs/tasks/traffic-management/ingress/gateway-api) is
-installed into both clusters, and `kubectl` is configured with the necessary credentials access to
-reach both clusters, with the context for each of the clusters available in the environment
-variables `$CTX1` and `$CTX2`.
+installed into both clusters, and `kubectl` is configured with the necessary credentials to reach
+both clusters, with the context for each of the clusters available in the environment variables
+`$CTX1` and `$CTX2`.
 
 ### Installation
 
