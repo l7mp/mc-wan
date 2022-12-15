@@ -349,19 +349,21 @@ this.
 
 ## Getting started
 
-A *work in progress* proof-of-concept tool is available that automates the creation and deletion
-the mechanics of the ServiceImport and ServiceExport workflow. For now, the tool provides a simple
-imperative interface, whereby the user explicitly performs service imports/exports, providing all
-the necessary parameters on the command line. Later, this tool will be developed into a Kubernetes
-operator to automatically reconcile the ServiceImport/ServiceExport CRDs.
+(*Work in progress*)
+
+A proof-of-concept tool is available that automates the ServiceImport and ServiceExport
+workflows. For now, the tool provides a simple imperative interface, whereby the user explicitly
+performs service imports/exports, providing all the necessary parameters on the command
+line. Later, this tool will be developed into a Kubernetes operator to automatically reconcile the
+ServiceImport/ServiceExport CRDs.
 
 ### Prerequisites
 
-It is assumed the two Kubernetes clusters with Istio installed are available, `kubectl` is
-configured with the necessary credentials access to reach both clusters, and the context for each
-of the clusters is available in the environment variables `$CTX1` and `$CTX2`. We assume a Gateway
-API implementation is available; we use the built-in [Gateway API implementation from
-Istio](https://istio.io/latest/docs/tasks/traffic-management/ingress/gateway-api).
+It is assumed two Kubernetes clusters are available, Istio with the built-in [Gateway API
+implementation](https://istio.io/latest/docs/tasks/traffic-management/ingress/gateway-api) is
+installed into both clusters, and `kubectl` is configured with the necessary credentials access to
+reach both clusters, with the context for each of the clusters available in the environment
+variables `$CTX1` and `$CTX2`.
 
 ### Installation
 
@@ -374,44 +376,45 @@ go build -o mcwanctl main.go
 
 ### Service export
 
-Export the `payment.secure` service from cluster-2 over the high-priority SD-WAN tunnel.
+Export the `payment.secure` service from cluster-1 over the high-priority SD-WAN tunnel.
 
 ``` console
-mcwanctl --context $CTX2 export payment/secure --wan-policy=high
+mcwanctl --context $CTX1 export payment/secure --wan-policy=high
 ```
 
-This call will set up the server-side pipeline to ingest requests from clusters that import the
-service into cluster-2 and route the requests to the backend pods of the `payment.secure`
-service. The below will query the status of a service-export, providing the SD-WAN policy
-associated with the service exposition and a `GW_IP_ADDRESS` that can be used to reach the service
-from other clusters.
+This call will set up the server-side pipeline to ingest requests to the `payment.secure` service
+into the cluster and route them to the proper backend pods. 
+
+The below command will query the status of a service-export, providing the SD-WAN policy associated
+with the service exposition and a `GW_IP_ADDRESS` that can be used to reach the service from other
+clusters.
 
 ``` console
-mcwanctl --context $CTX2 status payment/secure
+mcwanctl --context $CTX1 status payment/secure
 ```
 
 The below command deletes a service export.
 
 ``` console
-mcwanctl --context $CTX2 unexport payment/secure
+mcwanctl --context $CTX1 unexport payment/secure
 ```
 
 ### Service import
 
-In and of itself a service export will not do much: to actually reach an exported service a cluster
-needs to explicitly import it. The below will import the `payment.secure` service into cluster-1.
+In and of itself a service export will not do much; to actually reach an exported service a cluster
+needs to explicitly import it. The below will import the `payment.secure` service into cluster-2.
 
 ``` console
-mcwanctl --context $CTX1 import payment/secure --ingress-gw=<GW_IP_ADDRESS>
+mcwanctl --context $CTX2 import payment/secure --ingress-gw=<GW_IP_ADDRESS>
 ```
 
-At this point, requests to `http://payment.secure.svc.clusterset.local:8000` should be routed
-through the high-priority SD-WAN tunnel and land at one of the backend pods in cluster-2.
+At this point, requests from cluster-2 to `http://payment.secure.svc.clusterset.local:8000` should
+be routed through the high-priority SD-WAN tunnel and land at one of the backend pods in cluster-1.
 
 Finally, remove a service import by unimporting it.
 
 ``` console
-mcwanctl --context $CTX1 unimport payment/secure
+mcwanctl --context $CTX2 unimport payment/secure
 ```
 
 ## License
