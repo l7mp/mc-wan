@@ -29,14 +29,40 @@ The clusters are installed with k8s (v1.25) and Istio (v1.16.0).
 
 0. Follow installation steps of the [Service-level SD-WAN policies](../01-service-level_SD-WAN_policies/README.md) demo.
 
-2. Appy client side L7 access control with [yaml/5-client-side-l7-policy-gw.yaml](yaml/5-client-side-l7-policy-gw.yaml). This config restricts access to the path `/anything`.
+1. Apply client side L7 traffic routing on **cluster1** with [yaml/5-client-side-l7-policy-gw.yaml](yaml/5-client-side-l7-policy-gw.yaml). In this demo, this config sends traffic to path `/anything` over the *Business Internet*, otherwise on *Public Internet*.
 
 ```console
-kubectl apply -f yaml/5-server-side-l7-policy.yaml
+kubectl apply -f yaml/5-client-side-l7-policy.yaml
 ```
-
-*TODO*
 
 ### Test and Demo
 
-*TODO*
+2. Send a request to service running in cluster2 from the client (`net-debug` pod) in **cluster1**:
+
+```console
+kubectl exec -it $(kubectl get pods -o custom-columns=":metadata.name" | grep net-debug-nonhost) -- curl -X GET -v -I -H "Host: payment.default.svc.clusterset.local" http://payment-egress:8000
+```
+
+3. Do a volumetric measurement to check proper configuration:
+
+- Generate test traffic on *cluster1*:
+
+```console
+while [ true ]; do kubectl exec -it $(kubectl get pods -o custom-columns=":metadata.name" | grep net-debug-nonhost) -- curl -X GET -sS -H "Host: payment.default.svc.clusterset.local" http://payment-egress:8000 -o /dev/null ; done
+```
+
+- Observe metrics on the vManage UI:
+Navigate to *Monitor/Network*, and select a vEdge instance. Click on *Interface*, then select *Real Time* over the graph.
+
+In case of `/anything`, We expect to see traffic on *Business Internet*.
+
+*TODO add fig*
+
+For `payment-insecure`, repeat these steps, but generate traffic as:
+```console
+while [ true ]; do kubectl exec -it $(kubectl get pods -o custom-columns=":metadata.name" | grep net-debug-nonhost) -- curl -X GET -sS -H "Host: payment.default.svc.clusterset.local" http://payment-egress:8000 -o /dev/null ; done
+```
+
+This time the traffic goes on *Public Internet*.
+
+*TODO add fig*
