@@ -1,4 +1,4 @@
-# A Multi-cluster service mesh east-west gateway for SD-WAN
+# A Multi-cluster SD-WAN east-west gateway
 
 The goal of this project is to build an east-west (EW) gateway to seamlessly interconnect two or
 more service-mesh clusters over an SD-WAN fabric, integrating the L4/L7 traffic management policies
@@ -13,6 +13,7 @@ observability and the security functions, for a consistent end-to-end user exper
 1. [L7 traffic management](#l7-traffic-management)
 1. [Resiliency](#resiliency)
 1. [Observability](#observability)
+1. [Getting started](#getting-started)
 1. [License](#license)
 
 ## Overview
@@ -85,9 +86,9 @@ spec:
   tunnel: business
   port: 31111
   sla:
-    - jitter-ms: 50
-    - latency-ms: 100
-    - loss-percent: 10
+    jitter-ms: 50
+    latency-ms: 100
+    loss-percent: 1
 ---
 apiVersion: mcw.l7mp.io/v1alpha1
 kind: WANPolicy
@@ -97,9 +98,9 @@ spec:
   tunnel: default
   port: 31112
   sla:
-    - jitter-ms: 1000
-    - latency-ms: 1000
-    - loss-percent: 100
+    jitter-ms: 1000
+    latency-ms: 1000
+    loss-percent: 100
 ```
 
 Note that the same WANPolicy CRs must exist on all clusters attached to the clusterset and they
@@ -213,7 +214,7 @@ spec:
   - match:
     - uri:
         prefix: "/payment"
-      scheme:
+      method:
         exact: GET
     route:
     - destination:
@@ -325,7 +326,7 @@ spec:
   - match:
     - uri:
         prefix: "/payment"
-      scheme:
+      method:
         exact: GET
     route:
     - destination:
@@ -345,6 +346,73 @@ capabilities provided by Istio's L7 traffic management policies.
 Adding a `spanid` HTTP header to each connection crossing the SD-WAN is already within the
 capabilities of the framework, but maybe at a certain point we could provide some automation around
 this.
+
+## Getting started
+
+A *work in progress* proof-of-concept tool is available that automates the creation and deletion
+the mechanics of the ServiceImport and ServiceExport workflow. For now, the tool provides a simple
+imperative interface, whereby the user explicitly performs service imports/exports, providing all
+the necessary parameters on the command line. Later, this tool will be developed into a Kubernetes
+operator to automatically reconcile the ServiceImport/ServiceExport CRDs.
+
+### Prerequisites
+
+It is assumed the two Kubernetes clusters with Istio installed are available, `kubectl` is
+configured with the necessary credentials access to reach both clusters, and the context for each
+of the clusters is available in the environment variables `$CTX1` and `$CTX2`. We assume a Gateway
+API implementation is available; we use the built-in [Gateway API implementation from
+Istio](https://istio.io/latest/docs/tasks/traffic-management/ingress/gateway-api).
+
+### Installation
+
+Clone the repository and build the `mcwanctl` command line tool.
+
+``` console
+cd mc-wan
+go build -o mcwanctl main.go
+```
+
+### Service export
+
+Export the `payment.secure` service from cluster-2 over the high-priority SD-WAN tunnel.
+
+``` console
+mcwanctl --context $CTX2 export payment/secure --wan-policy=high
+```
+
+This call will set up the server-side pipeline to ingest requests from clusters that import the
+service into cluster-2 and route the requests to the backend pods of the `payment.secure`
+service. The below will query the status of a service-export, providing the SD-WAN policy
+associated with the service exposition and a `GW_IP_ADDRESS` that can be used to reach the service
+from other clusters.
+
+``` console
+mcwanctl --context $CTX2 status payment/secure
+```
+
+The below command deletes a service export.
+
+``` console
+mcwanctl --context $CTX2 unexport payment/secure
+```
+
+### Service import
+
+In and of itself a service export will not do much: to actually reach an exported service a cluster
+needs to explicitly import it. The below will import the `payment.secure` service into cluster-1.
+
+``` console
+mcwanctl --context $CTX1 import payment/secure --ingress-gw=<GW_IP_ADDRESS>
+```
+
+At this point, requests to `http://payment.secure.svc.clusterset.local:8000` should be routed
+through the high-priority SD-WAN tunnel and land at one of the backend pods in cluster-2.
+
+Finally, remove a service import by unimporting it.
+
+``` console
+mcwanctl --context $CTX1 unimport payment/secure
+```
 
 ## License
 
