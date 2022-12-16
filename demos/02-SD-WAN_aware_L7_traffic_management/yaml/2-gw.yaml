@@ -1,0 +1,50 @@
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: Gateway
+metadata:
+  name: payment-ingress
+  namespace: default
+  annotations:
+    networking.istio.io/service-type: ClusterIP
+spec:
+  gatewayClassName: istio
+  listeners:
+  - name: sd-wan-priority-high
+    protocol: HTTP
+    port: 31111
+    allowedRoutes:
+      namespaces:
+        from: Same
+  - name: sd-wan-priority-low
+    protocol: HTTP
+    port: 31112
+    allowedRoutes:
+      namespaces:
+        from: Same
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-ingress
+  namespace: default
+spec:
+  type: NodePort
+  ports:
+  - name: status-port
+    nodePort: 32290
+    port: 15021
+    protocol: TCP
+    targetPort: 15021
+  - name: sd-wan-priority-high
+    nodePort: 31111
+    port: 31111
+    protocol: TCP
+    targetPort: 31111
+  - name: sd-wan-priority-low
+    nodePort: 31112
+    port: 31112
+    protocol: TCP
+    targetPort: 31112
+  selector:
+    istio.io/gateway-name: payment-ingress

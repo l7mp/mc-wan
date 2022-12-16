@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-secure
+  namespace: default
+spec:
+  ports:
+  - name: payment-secure
+    protocol: TCP
+    port: 8000
+    targetPort: 31111
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: payment-secure
+  namespace: default
+subsets:
+  - addresses:
+      - ip: 10.111.1.29
+    ports:
+      - name: payment-secure
+        port: 31111
+        protocol: TCP
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-insecure
+  namespace: default
+spec:
+  ports:
+  - name: payment-insecure
+    protocol: TCP
+    port: 8000
+    targetPort: 31112
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: payment-insecure
+  namespace: default
+subsets:
+  - addresses:
+      - ip: 10.111.1.29
+    ports:
+      - name: payment-insecure
+        port: 31112
+        protocol: TCP
